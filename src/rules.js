@@ -17,8 +17,14 @@
 //   renderOverBricks(ctx, g, r, R)   drawn over the bricks but under capsules, paddles and balls.
 //   beforeLifeLost(g, r, reason)     return true to handle a lost ball yourself (no life is lost).
 //   holdClear(g, r)                  return true while the level must not count as cleared yet.
+//   onServeBall(g, r, ball)          a new ball is waiting on the paddle (e.g. make it big).
+//   canDeflect / onDeflect(g, r, ball, d)  for deflector panels the rule added (see game.js).
 // Engine extension points a rule can switch on in init (see game.js): g.wrapX, g.topOpen,
 // g.addXPaddle(...), g.makeGhostable(brick) + b.wantGhost each step, g.paddle.off, g.retry().
+// Phase 3 added (all off by default): g.wallL / g.wallR (side walls move), g.paddleIce (paddle momentum),
+// g.paddle.frozen / g.paddle.speedCap, ball.pierce (burns through bricks), ball.r / ball.sizeMul /
+// ball.zoneMul (ball size and speed), g.addDeflector(...) (angled panels), g.rectBlocked(...),
+// g.removeRule(inst) (a boss borrowing a rule for one phase).
 // Rules compose: each only touches its own state, its own bricks, or adds offsets/forces.
 (function (BT) {
   'use strict';
@@ -272,17 +278,31 @@
   // ---------------- Portals: paired; in one, out of its twin ----------------
   // params: pairs [[{x,y},{x,y}], ...]
   var PORTAL_COLORS = ['#ff9f43', '#4fd8ff', '#c56bff'];
+  // An end with vx (px/s) rides sideways and wraps across the field, like a conveyor lane.
   register('portals', {
-    init: function (g, r) { r.s.t = 0; r.s.flash = [0, 0, 0, 0, 0, 0]; },
+    init: function (g, r) {
+      r.s.t = 0; r.s.flash = [0, 0, 0, 0, 0, 0]; r.s.pos = []; r.s.moving = false;
+      var pairs = r.p.pairs;
+      for (var pi = 0; pi < pairs.length; pi++) for (var e = 0; e < 2; e++) {
+        var A = pairs[pi][e];
+        if (A.vx) { r.s.moving = true; r.s.pos.push({ x: A.x, y: A.y }); } else r.s.pos.push(A);
+      }
+    },
     update: function (g, r, dt) {
       r.s.t += dt;
       for (var i = 0; i < r.s.flash.length; i++) if (r.s.flash[i] > 0) r.s.flash[i] -= dt;
+      if (!r.s.moving) return;
+      var pairs = r.p.pairs, sc = g.preset.hazardScale;
+      for (var pi = 0; pi < pairs.length; pi++) for (var e = 0; e < 2; e++) {
+        var A = pairs[pi][e];
+        if (A.vx) r.s.pos[pi * 2 + e].x = g.wrapPos(A.x + A.vx * sc * r.s.t);
+      }
     },
     onBallStep: function (g, r, ball) {
-      var pairs = r.p.pairs, rad = r.p.radius, cap = rad * r.p.captureFrac;
+      var pairs = r.p.pairs, rad = r.p.radius, cap = rad * r.p.captureFrac, pos = r.s.pos;
       for (var pi = 0; pi < pairs.length; pi++) {
         for (var e = 0; e < 2; e++) {
-          var id = pi * 2 + e, A = pairs[pi][e], B = pairs[pi][1 - e];
+          var id = pi * 2 + e, A = pos[id], B = pos[pi * 2 + 1 - e];
           if (ball.portalLock === id) {
             var dx = ball.x - A.x, dy = ball.y - A.y;
             if (dx * dx + dy * dy > (rad + ball.r) * (rad + ball.r)) ball.portalLock = -1;
@@ -308,7 +328,7 @@
       for (var pi = 0; pi < pairs.length; pi++) {
         var col = PORTAL_COLORS[pi % 3];
         for (var e = 0; e < 2; e++) {
-          var A = pairs[pi][e], fl = r.s.flash[pi * 2 + e] > 0 ? 1 : 0;
+          var A = r.s.pos[pi * 2 + e], fl = r.s.flash[pi * 2 + e] > 0 ? 1 : 0;
           ctx.fillStyle = 'rgba(5,6,18,0.9)';
           ctx.beginPath(); ctx.arc(A.x, A.y, rad, 0, TAU); ctx.fill();
           ctx.strokeStyle = col; ctx.lineWidth = 3 + fl * 2;
@@ -339,6 +359,7 @@
       out.ax = 0; out.ay = 0;
       for (var i = 0; i < pl.length; i++) {
         var dx = pl[i].x - x, dy = pl[i].y - y;
+        if (g.wrapX) dx = g.wrapDelta(dx); // no side walls: a planet pulls across the edge too
         var d2 = dx * dx + dy * dy, d = Math.sqrt(d2);
         if (d < 1e-3) continue;
         var a = k * (pl[i].mass || 1) / Math.max(d2, md2);
@@ -351,7 +372,8 @@
       ball.vx += ACC.ax * dt; ball.vy += ACC.ay * dt;
       var pl = r.p.planets, pr = r.p.planetRadius;
       for (var i = 0; i < pl.length; i++) {
-        if (P.circleCircle(ball.x, ball.y, ball.r, pl[i].x, pl[i].y, pr) > 0) {
+        var plx = g.wrapX ? g.wrapNear(pl[i].x, ball.x) : pl[i].x;
+        if (P.circleCircle(ball.x, ball.y, ball.r, plx, pl[i].y, pr) > 0) {
           ball.x += HIT.nx * HIT.depth; ball.y += HIT.ny * HIT.depth;
           if (P.reflect(ball, HIT.nx, HIT.ny)) g.fx.sound('bumper', 0);
         }
@@ -399,8 +421,9 @@
         vx += ACC.ax * dt; vy += ACC.ay * dt;
         var s = Math.sqrt(vx * vx + vy * vy); vx = vx / s * sp; vy = vy / s * sp;
         x += vx * dt; y += vy * dt;
-        if (x < b.r) { x = b.r; vx = -vx; }
-        if (x > C.W - b.r) { x = C.W - b.r; vx = -vx; }
+        if (g.wrapX) x = g.wrapPos(x);
+        else if (x < b.r) { x = b.r; vx = -vx; }
+        else if (x > C.W - b.r) { x = C.W - b.r; vx = -vx; }
         if (y < C.TOP + b.r) { y = C.TOP + b.r; vy = -vy; }
         var stop = false;
         for (var i = 0; i < pl.length; i++) {
@@ -605,6 +628,7 @@
       for (i = 0; i < g.bricks.length; i++) {
         var b = g.bricks[i];
         if (b.alive && b.type === 'glow') add(b.x + b.w / 2, b.y + b.h / 2, p.glowLight * m, 0.8);
+        else if (b.alive && b.type === 'core') add(b.x + b.w / 2, b.y + b.h / 2, p.coreLight * m, 0.9);
       }
       for (i = 0; i < s.pool.length; i++) {
         var L = s.pool[i];
@@ -682,10 +706,15 @@
         s.idle = (s.idle || 0) + dt;
         if (s.idle > r.p.autoSwap) this.swap(g, r, C.W / 2, 150);
       } else s.idle = 0;
+      // optional (idleSwap > 0): also swap by themselves if no switch has been hit for that long
+      if (r.p.idleSwap && g.state === 'play') {
+        s.since = (s.since || 0) + dt;
+        if (ghostLeft && s.since > r.p.idleSwap) this.swap(g, r, C.W / 2, 150);
+      }
     },
     swap: function (g, r, x, y) {
       var s = r.s;
-      s.cd = r.p.swapCooldown; s.idle = 0;
+      s.cd = r.p.swapCooldown; s.idle = 0; s.since = 0;
       s.solid = s.solid === 'red' ? 'blue' : 'red';
       s.flash = 0.35;
       g.fx.sound('swap');
@@ -704,7 +733,7 @@
       if (layer !== 'front') return;
       // legend under the HUD: which colour is solid right now (shape + word, not just colour)
       var s = r.s, red = s.solid === 'red';
-      var x = C.W / 2, y = C.TOP + 10;
+      var x = r.p.legendX || C.W / 2, y = C.TOP + (r.p.legendY || 10);
       ctx.save();
       R.roundRect(ctx, x - 62, y - 8, 124, 16, 8);
       ctx.fillStyle = 'rgba(5,7,16,0.75)'; ctx.fill();
@@ -1265,6 +1294,647 @@
       if (g.attempts > 0) {
         ctx.fillStyle = 'rgba(255,255,255,0.45)'; ctx.font = '11px ' + R.FONT;
         ctx.fillText('Try ' + (g.attempts + 1), C.W / 2, y - 40);
+      }
+      ctx.restore();
+    }
+  });
+
+  // ======================================================================================
+  // World 7 - The elements
+  // ======================================================================================
+
+  // ---------------- Ice Rink: the paddle slides; frozen bricks (grid I) thaw on the first hit ----------------
+  register('ice', {
+    init: function (g, r) {
+      var p = r.p, easy = g.presetName === 'easy';
+      g.paddleIce = {
+        follow: easy ? p.followEasy : p.follow,
+        grip: easy ? p.gripEasy : p.grip / Math.sqrt(g.preset.hazardScale),
+        bounce: p.bounce
+      };
+      r.s.marks = []; r.s.markT = 0;
+      for (var i = 0; i < 14; i++) r.s.marks.push({ x: 0, a: 0 });
+    },
+    update: function (g, r, dt) {
+      // skate marks left behind when the paddle slides fast
+      var s = r.s, pd = g.paddle;
+      s.markT -= dt;
+      for (var i = 0; i < s.marks.length; i++) if (s.marks[i].a > 0) s.marks[i].a -= dt * 1.2;
+      if (s.markT <= 0 && Math.abs(pd.iv) > 260) {
+        s.markT = 0.05;
+        var m = s.marks[0];
+        for (i = 1; i < s.marks.length; i++) if (s.marks[i].a < m.a) m = s.marks[i];
+        m.x = pd.x - (pd.iv > 0 ? 1 : -1) * pd.w * 0.4; m.a = Math.min(1, Math.abs(pd.iv) / 900);
+      }
+    },
+    render: function (ctx, g, r, layer) {
+      var pd = g.paddle, i;
+      ctx.save();
+      if (layer === 'back') {
+        // a sheet of ice under the paddle's track, with a sheen that slides past
+        var y0 = pd.y + pd.h / 2 + 2;
+        var grd = ctx.createLinearGradient(0, y0, 0, y0 + 26);
+        grd.addColorStop(0, 'rgba(190,235,255,0.22)'); grd.addColorStop(1, 'rgba(190,235,255,0)');
+        ctx.fillStyle = grd; ctx.fillRect(g.wallL, y0, g.wallR - g.wallL, 26);
+        ctx.strokeStyle = 'rgba(220,245,255,0.35)'; ctx.lineWidth = 1;
+        for (i = 0; i < r.s.marks.length; i++) {
+          var m = r.s.marks[i];
+          if (m.a <= 0) continue;
+          ctx.globalAlpha = m.a * 0.8;
+          ctx.beginPath(); ctx.moveTo(m.x - 10, y0 + 4); ctx.lineTo(m.x + 10, y0 + 6); ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+      } else {
+        // frost on top of the paddle, and little speed streaks when it is sliding
+        var x = pd.x - pd.w / 2, y = pd.y - pd.h / 2;
+        ctx.fillStyle = 'rgba(235,250,255,0.85)';
+        for (i = 0; i < 6; i++) {
+          var fx = x + 6 + i * (pd.w - 12) / 5;
+          ctx.beginPath(); ctx.moveTo(fx - 3, y + 1); ctx.lineTo(fx, y - 3); ctx.lineTo(fx + 3, y + 1); ctx.closePath(); ctx.fill();
+        }
+        var sp = Math.abs(pd.iv);
+        if (sp > 200) {
+          var dir = pd.iv > 0 ? -1 : 1, a = Math.min(0.6, sp / 1500);
+          ctx.strokeStyle = 'rgba(220,245,255,' + a.toFixed(3) + ')'; ctx.lineWidth = 1.5;
+          for (i = 0; i < 3; i++) {
+            var sx = pd.x + dir * (pd.w / 2 + 4), sy = pd.y - 4 + i * 4;
+            ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(sx + dir * (8 + sp / 90), sy); ctx.stroke();
+          }
+        }
+      }
+      ctx.restore();
+    }
+  });
+
+  // ---------------- High Tide: water rises and falls; ball and paddle are slower under water ----------------
+  // The surface follows a smooth, fixed cycle (low -> high -> low), shown by a tide gauge with an arrow.
+  register('tide', {
+    init: function (g, r) { r.s.t = 0; r.s.level = r.p.low; r.s.bub = 0; },
+    levelAt: function (r, t) {
+      var p = r.p;
+      return p.low - (p.low - p.high) * (0.5 - 0.5 * Math.cos(TAU * t / p.period));
+    },
+    update: function (g, r, dt) {
+      var s = r.s, p = r.p, pd = g.paddle;
+      if (g.state === 'play' || g.state === 'clearing') s.t += dt;
+      s.level = this.levelAt(r, s.t);
+      s.rising = Math.sin(TAU * s.t / p.period) >= 0;
+      var wet = pd.y - pd.h / 2 > s.level;
+      s.paddleWet = wet;
+      pd.speedCap = wet ? (g.presetName === 'easy' ? p.paddleCapEasy : p.paddleCap / Math.sqrt(g.preset.hazardScale)) : 0;
+      if (s.bub > 0) s.bub -= dt;
+    },
+    onBallStep: function (g, r, ball, dt) {
+      var p = r.p, want = ball.y > r.s.level ? p.ballMul : 1;
+      var was = ball.y - ball.vy * dt > r.s.level;
+      ball.zoneMul += (want - ball.zoneMul) * Math.min(1, p.ease * dt);
+      if (Math.abs(ball.zoneMul - want) < 0.002) ball.zoneMul = want;
+      if (was !== (ball.y > r.s.level) && r.s.bub <= 0) { // splash when crossing the surface
+        r.s.bub = 0.25;
+        g.fx.sound('splash');
+        g.fx.burst(ball.x, r.s.level, '#9fe3ff', 8, 'spark');
+      }
+    },
+    onLifeLost: function (g, r) { r.s.t = 0; }, // a fresh serve starts at low tide again
+    render: function (ctx, g, r, layer, R) {
+      if (layer !== 'front') return;
+      var s = r.s, p = r.p, y = s.level, i;
+      ctx.save();
+      // high-tide mark: how far the water will come
+      ctx.strokeStyle = 'rgba(120,200,255,0.35)'; ctx.lineWidth = 1; ctx.setLineDash([3, 5]);
+      ctx.beginPath(); ctx.moveTo(0, p.high); ctx.lineTo(C.W, p.high); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(160,215,255,0.55)'; ctx.font = 'bold 9px ' + R.FONT; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+      ctx.fillText('HIGH TIDE', 6, p.high - 2);
+      if (y < C.H) {
+        // water body: a light tint so everything under it still reads
+        var grd = ctx.createLinearGradient(0, y, 0, C.H);
+        grd.addColorStop(0, 'rgba(40,140,255,0.26)'); grd.addColorStop(1, 'rgba(20,70,180,0.34)');
+        ctx.fillStyle = grd;
+        ctx.beginPath(); ctx.moveTo(0, C.H);
+        for (var x = 0; x <= C.W; x += 12) ctx.lineTo(x, y + Math.sin(x * 0.05 + g.t * 2.4) * 2.5);
+        ctx.lineTo(C.W, C.H); ctx.closePath(); ctx.fill();
+        // bright surface line
+        ctx.strokeStyle = 'rgba(190,240,255,0.9)'; ctx.lineWidth = 2;
+        ctx.beginPath();
+        for (x = 0; x <= C.W; x += 12) { var yy = y + Math.sin(x * 0.05 + g.t * 2.4) * 2.5; if (x === 0) ctx.moveTo(x, yy); else ctx.lineTo(x, yy); }
+        ctx.stroke();
+      }
+      // tide gauge on the right: scale, current level and an arrow for rising / falling
+      var gx = C.W - 14, top = p.high - 6, bot = Math.min(C.H - 8, p.low);
+      R.roundRect(ctx, gx - 5, top, 10, bot - top, 5);
+      ctx.fillStyle = 'rgba(5,10,30,0.6)'; ctx.fill();
+      ctx.strokeStyle = 'rgba(160,215,255,0.5)'; ctx.lineWidth = 1; ctx.stroke();
+      for (i = 0; i <= 4; i++) { var ty = top + 4 + (bot - top - 8) * i / 4; ctx.fillStyle = 'rgba(160,215,255,0.5)'; ctx.fillRect(gx - 3, ty, 6, 1); }
+      var my = Math.max(top + 4, Math.min(bot - 4, y));
+      ctx.fillStyle = '#bff0ff';
+      ctx.beginPath();
+      if (s.rising) { ctx.moveTo(gx - 9, my + 5); ctx.lineTo(gx - 1, my + 5); ctx.lineTo(gx - 5, my - 5); }
+      else { ctx.moveTo(gx - 9, my - 5); ctx.lineTo(gx - 1, my - 5); ctx.lineTo(gx - 5, my + 5); }
+      ctx.closePath(); ctx.fill();
+      ctx.fillRect(gx - 4, my - 1, 9, 2);
+      ctx.restore();
+    }
+  });
+
+  // ---------------- Red Hot: a combo heats the ball; red hot it burns straight through bricks ----------------
+  // Each brick hit without touching the paddle adds heat. At hotAt it glows and burns through the next
+  // `burns` breakable bricks without bouncing (steel and walls still bounce it), then it is spent. The paddle
+  // cools it. Heat shows as pips round the ball and a flame ring when hot, not by colour alone.
+  register('redhot', {
+    init: function (g, r) { r.s.t = 0; r.s.hotAt = g.presetName === 'easy' ? r.p.hotAtEasy : r.p.hotAt; },
+    update: function (g, r, dt) { r.s.t += dt; },
+    onBrickHit: function (g, r, k, ball, cause) {
+      if (!ball || cause !== 'ball' || !k.breakable) return false;
+      if (ball.hot && !(ball.pierce > 0)) this.cool(g, ball, 'Fizz!'); // burnt out: this brick starts the heat again
+      ball.heat = (ball.heat || 0) + 1;
+      if (ball.heat >= r.s.hotAt && !(ball.pierce > 0)) {
+        ball.pierce = r.p.burns; ball.hot = true;
+        g.fx.sound('sizzle');
+        g.fx.text(ball.x, ball.y - 16, 'Red hot!', '#ffb347');
+      }
+      return false;
+    },
+    onBallStep: function (g, r, ball) {
+      if (ball.hot && ball.pierce <= 0) this.cool(g, ball, 'Fizz!');
+      if (ball.hot && (r.s.t * 30 | 0) % 2 === 0) g.fx.burst(ball.x, ball.y, '#ff9f43', 1, 'spark');
+    },
+    onPaddleHit: function (g, r, ball) {
+      if (ball.hot) this.cool(g, ball, 'Cooled');
+      ball.heat = 0; ball.pierce = 0;
+    },
+    cool: function (g, ball, word) {
+      ball.hot = false; ball.heat = 0; ball.pierce = 0;
+      g.fx.sound('fizz');
+      g.fx.burst(ball.x, ball.y, '#c9d6ee', 8, 'spark');
+      if (word) g.fx.text(ball.x, ball.y - 14, word, '#c9d6ee');
+    },
+    render: function (ctx, g, r, layer, R) {
+      if (layer !== 'front') return;
+      var s = r.s, i, k;
+      ctx.save();
+      for (i = 0; i < g.balls.length; i++) {
+        var b = g.balls[i];
+        if (b.hot) { // flame ring: spikes round the ball, flickering
+          ctx.fillStyle = 'rgba(255,140,40,0.9)';
+          ctx.beginPath();
+          var n = 10;
+          for (k = 0; k <= n * 2; k++) {
+            var a = k / (n * 2) * TAU + s.t * 6;
+            var rr = k % 2 ? b.r + 2 : b.r + 6 + 2 * Math.sin(s.t * 40 + k);
+            if (k === 0) ctx.moveTo(b.x + Math.cos(a) * rr, b.y + Math.sin(a) * rr); else ctx.lineTo(b.x + Math.cos(a) * rr, b.y + Math.sin(a) * rr);
+          }
+          ctx.closePath(); ctx.fill();
+          ctx.fillStyle = '#ffe27a'; ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, TAU); ctx.fill();
+          ctx.fillStyle = '#ff5a1f'; ctx.beginPath(); ctx.arc(b.x, b.y, b.r * 0.45, 0, TAU); ctx.fill();
+        } else if (b.heat > 0 && !b.stuck) { // heat pips: one arc per brick of heat
+          for (k = 0; k < s.hotAt; k++) {
+            var a0 = -Math.PI / 2 + k * TAU / s.hotAt + 0.15, a1 = a0 + TAU / s.hotAt - 0.3;
+            ctx.strokeStyle = k < b.heat ? '#ff9f43' : 'rgba(255,255,255,0.25)'; ctx.lineWidth = 2.5;
+            ctx.beginPath(); ctx.arc(b.x, b.y, b.r + 4, a0, a1); ctx.stroke();
+          }
+        }
+      }
+      // HUD: heat of the hottest ball, as flame pips; when red hot, how many bricks it will burn through
+      var best = null;
+      for (i = 0; i < g.balls.length; i++) if (!best || (g.balls[i].heat || 0) + (g.balls[i].hot ? 99 : 0) > (best.heat || 0) + (best.hot ? 99 : 0)) best = g.balls[i];
+      var x = C.W / 2, y = C.TOP + 10, hot = best && best.hot;
+      R.roundRect(ctx, x - 64, y - 8, 128, 16, 8);
+      ctx.fillStyle = hot ? 'rgba(90,20,0,0.85)' : 'rgba(5,7,16,0.75)'; ctx.fill();
+      ctx.fillStyle = '#ffffff'; ctx.font = 'bold 10px ' + R.FONT; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      if (hot) {
+        ctx.fillText('RED HOT: burns ' + best.pierce + ' more', x - 54, y + 0.5);
+      } else {
+        ctx.fillText('HEAT', x - 54, y + 0.5);
+        for (k = 0; k < s.hotAt; k++) this.flame(ctx, x - 14 + k * 16, y, best && k < (best.heat || 0));
+      }
+      ctx.restore();
+    },
+    flame: function (ctx, x, y, on) {
+      ctx.beginPath();
+      ctx.moveTo(x, y - 6); ctx.quadraticCurveTo(x + 5, y, x + 3, y + 4); ctx.lineTo(x - 3, y + 4); ctx.quadraticCurveTo(x - 5, y, x, y - 6);
+      if (on) { ctx.fillStyle = '#ff9f43'; ctx.fill(); }
+      else { ctx.strokeStyle = 'rgba(255,255,255,0.4)'; ctx.lineWidth = 1; ctx.stroke(); }
+    }
+  });
+
+  // ---------------- Thunderstorm: telegraphed lightning strikes a column ----------------
+  // A cloud gathers over a column and the column flickers for `telegraph` seconds, then lightning smashes
+  // every brick in it (one hit each; steel just clangs) and freezes the paddle briefly if it is underneath.
+  register('thunder', {
+    init: function (g, r) {
+      var s = r.s;
+      s.phase = 'calm'; s.timer = r.p.first; s.x = C.W / 2; s.flash = 0; s.t = 0; s.bolt = [];
+      s.zap = 0;
+    },
+    telegraph: function (g, r) { return g.presetName === 'easy' ? r.p.telegraphEasy : r.p.telegraph; },
+    pickX: function (g, r) {
+      var p = r.p, pd = g.paddle;
+      if (g.presetName !== 'easy' && g.rng() < p.aimAtPaddle) return P.clamp(pd.x, g.wallL + p.width / 2, g.wallR - p.width / 2);
+      // mostly where there are bricks to smash (so a strike helps as well as hurts)
+      var cols = [], gr = C.grid;
+      for (var c = 0; c < gr.cols; c++) {
+        var x = c * gr.cellW + gr.cellW / 2, n = 0;
+        for (var i = 0; i < g.bricks.length; i++) { var b = g.bricks[i]; if (b.alive && b.breakable && b.x < x + 4 && b.x + b.w > x - 4) n++; }
+        if (n) cols.push(x);
+      }
+      if (!cols.length || g.rng() < 0.25) return g.wallL + p.width / 2 + g.rng() * (g.wallR - g.wallL - p.width);
+      return cols[Math.floor(g.rng() * cols.length)];
+    },
+    update: function (g, r, dt) {
+      var s = r.s, p = r.p, pd = g.paddle;
+      s.t += dt;
+      if (s.flash > 0) s.flash -= dt;
+      if (s.zap > 0) s.zap -= dt;
+      // Easy: a frozen paddle thaws as soon as a falling ball comes near, so a strike never costs a ball
+      if (pd.frozen > 0 && g.presetName === 'easy') {
+        for (var i = 0; i < g.balls.length; i++) {
+          var b = g.balls[i];
+          if (!b.stuck && b.vy > 0 && b.y > pd.y - p.thawNearEasy) { pd.frozen = 0; break; }
+        }
+      }
+      if (g.state !== 'play') { if (s.phase === 'warn') { s.phase = 'calm'; s.timer = p.first; } return; }
+      s.timer -= dt * (s.phase === 'calm' ? g.preset.hazardScale : 1);
+      if (s.timer > 0) return;
+      if (s.phase === 'calm') {
+        s.phase = 'warn'; s.timer = this.telegraph(g, r); s.x = this.pickX(g, r);
+        g.fx.sound('rumble');
+      } else {
+        this.strike(g, r, s.x);
+        s.phase = 'calm'; s.timer = p.calmMin + g.rng() * (p.calmMax - p.calmMin);
+      }
+    },
+    strike: function (g, r, x) {
+      var s = r.s, p = r.p, half = p.width / 2, pd = g.paddle, i;
+      s.flash = 0.3; s.boltX = x;
+      // jagged bolt shape (made once per strike, drawn while it fades)
+      s.bolt.length = 0;
+      for (var y = C.TOP; y < pd.y + 10; y += 22) s.bolt.push(x + (g.rng() * 2 - 1) * half * 0.6, y);
+      g.fx.sound('thunder');
+      g.fx.shake(4); g.shakeAmt = Math.max(g.shakeAmt, 4);
+      for (i = 0; i < g.bricks.length; i++) {
+        var b = g.bricks[i];
+        if (b.alive && b.x < x + half && b.x + b.w > x - half) g.hitBrick(b, null, 'lightning');
+      }
+      if (pd.x + pd.w / 2 > x - half && pd.x - pd.w / 2 < x + half && !pd.off) {
+        var f = g.presetName === 'easy' ? p.freezeEasy : p.freeze * Math.sqrt(g.preset.hazardScale);
+        pd.frozen = Math.max(pd.frozen, f); s.zap = f;
+        g.fx.sound('zap');
+        g.fx.text(pd.x, pd.y - 26, 'Zapped!', '#ffe27a');
+      }
+    },
+    render: function (ctx, g, r, layer, R) {
+      var s = r.s, p = r.p, half = p.width / 2, pd = g.paddle, i;
+      ctx.save();
+      if (layer === 'back') {
+        if (s.phase === 'warn') {
+          var k = 1 - s.timer / this.telegraph(g, r);
+          var fl = 0.05 + 0.12 * k + (Math.sin(s.t * (10 + 30 * k)) > 0 ? 0.06 : 0);
+          ctx.fillStyle = 'rgba(255,240,150,' + fl.toFixed(3) + ')';
+          ctx.fillRect(s.x - half, C.TOP, p.width, pd.y - C.TOP);
+          ctx.strokeStyle = 'rgba(255,240,150,' + (0.3 + 0.5 * k).toFixed(3) + ')'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 6]);
+          ctx.beginPath(); ctx.moveTo(s.x - half, C.TOP); ctx.lineTo(s.x - half, pd.y + 8); ctx.moveTo(s.x + half, C.TOP); ctx.lineTo(s.x + half, pd.y + 8); ctx.stroke();
+          ctx.setLineDash([]);
+        }
+        ctx.restore(); return;
+      }
+      // front: the storm cloud over the target column, the warning sign at paddle height, the bolt
+      if (s.phase === 'warn') {
+        var k2 = 1 - s.timer / this.telegraph(g, r);
+        this.cloud(ctx, s.x, C.TOP + 12, 1 + 0.25 * k2, k2);
+        var under = pd.x + pd.w / 2 > s.x - half && pd.x - pd.w / 2 < s.x + half;
+        var wy = pd.y + 26, a = 0.6 + 0.4 * Math.sin(s.t * 20);
+        ctx.fillStyle = under ? 'rgba(255,90,90,' + a.toFixed(3) + ')' : 'rgba(255,230,120,' + (a * 0.7).toFixed(3) + ')';
+        ctx.beginPath(); ctx.moveTo(s.x, wy - 11); ctx.lineTo(s.x + 10, wy + 7); ctx.lineTo(s.x - 10, wy + 7); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = '#1a1200'; ctx.font = 'bold 11px ' + R.FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('!', s.x, wy + 2);
+      }
+      if (s.flash > 0 && s.bolt.length) {
+        var al = Math.min(1, s.flash / 0.2);
+        ctx.fillStyle = 'rgba(255,255,230,' + (al * 0.18).toFixed(3) + ')'; ctx.fillRect(0, C.TOP, C.W, C.H - C.TOP);
+        ctx.strokeStyle = 'rgba(255,250,200,' + al.toFixed(3) + ')'; ctx.lineWidth = 4; ctx.lineJoin = 'round';
+        ctx.beginPath(); ctx.moveTo(s.bolt[0], s.bolt[1]);
+        for (i = 2; i < s.bolt.length; i += 2) ctx.lineTo(s.bolt[i], s.bolt[i + 1]);
+        ctx.stroke();
+        ctx.strokeStyle = 'rgba(255,255,255,' + al.toFixed(3) + ')'; ctx.lineWidth = 1.5; ctx.stroke();
+      }
+      if (pd.frozen > 0) { // zapped paddle: crackling zig-zag over it
+        ctx.strokeStyle = 'rgba(255,240,120,0.95)'; ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        var x0 = pd.x - pd.w / 2;
+        for (i = 0; i <= 8; i++) { var zx = x0 + pd.w * i / 8, zy = pd.y + ((i + (s.t * 20 | 0)) % 2 ? -4 : 4); if (i === 0) ctx.moveTo(zx, zy); else ctx.lineTo(zx, zy); }
+        ctx.stroke();
+      }
+      ctx.restore();
+    },
+    cloud: function (ctx, x, y, sc, dark) {
+      var c = Math.round(120 - 60 * dark);
+      ctx.fillStyle = 'rgb(' + c + ',' + c + ',' + (c + 25) + ')';
+      ctx.beginPath();
+      ctx.moveTo(x - 14 * sc + 9 * sc, y + 2); ctx.arc(x - 14 * sc, y + 2, 9 * sc, 0, TAU);
+      ctx.moveTo(x + 12 * sc, y - 3); ctx.arc(x, y - 3, 12 * sc, 0, TAU);
+      ctx.moveTo(x + 14 * sc + 9 * sc, y + 2); ctx.arc(x + 14 * sc, y + 2, 9 * sc, 0, TAU);
+      ctx.fill();
+    }
+  });
+
+  // ======================================================================================
+  // World 8 - Wits
+  // ======================================================================================
+
+  // ---------------- Runaways: bricks slide away from a ball that comes close ----------------
+  // They never leave the field, never overlap each other, steel or the ball, and get tired: each can only
+  // run for `stamina` seconds in all (the last few tire twice as fast, and if nothing is caught for
+  // giveUpAfter seconds they all give up), so the level always ends. Corner them against walls and each other.
+  register('runaway', {
+    init: function (g, r) {
+      var p = r.p, st = g.presetName === 'easy' ? p.staminaEasy : p.stamina * Math.sqrt(g.preset.hazardScale);
+      r.s.idle = 0; r.s.t = 0;
+      for (var i = 0; i < g.bricks.length; i++) {
+        var b = g.bricks[i];
+        if (!b.grid || !b.breakable) continue;
+        b.runner = true; b.stamina = st; b.maxStamina = st; b.fleeing = 0; b.look = 0;
+      }
+    },
+    update: function (g, r, dt) {
+      var p = r.p, s = r.s, i, j;
+      s.t += dt;
+      var left = 0;
+      for (i = 0; i < g.bricks.length; i++) if (g.bricks[i].alive && g.bricks[i].runner) left++;
+      if (g.state === 'play') s.idle += dt;
+      var giveUp = s.idle > p.giveUpAfter;
+      var drain = left <= p.tiredWhenLeft ? 2 : 1;
+      var speed = p.speed * g.preset.hazardScale;
+      for (i = 0; i < g.bricks.length; i++) {
+        var b = g.bricks[i];
+        if (!b.alive || !b.runner) continue;
+        if (b.fleeing > 0) b.fleeing -= dt;
+        if (giveUp) b.stamina = 0;
+        if (b.stamina <= 0 || g.state !== 'play') continue;
+        // nearest moving ball
+        var cx = b.x + b.w / 2, cy = b.y + b.h / 2, best = null, bd = p.radius;
+        for (j = 0; j < g.balls.length; j++) {
+          var ba = g.balls[j];
+          if (ba.stuck) continue;
+          var d = Math.sqrt((ba.x - cx) * (ba.x - cx) + (ba.y - cy) * (ba.y - cy));
+          if (d < bd) { bd = d; best = ba; }
+        }
+        if (!best) continue;
+        var ax = cx - best.x, ay = cy - best.y, al = Math.sqrt(ax * ax + ay * ay) || 1;
+        var tired = b.stamina / b.maxStamina, v = speed * (0.45 + 0.55 * tired) * dt;
+        var mx = ax / al * v, my = ay / al * v;
+        b.look = ax > 0 ? -1 : 1;
+        var moved = this.tryMove(g, r, b, mx, my) || this.tryMove(g, r, b, mx, 0) || this.tryMove(g, r, b, 0, my);
+        if (moved) { b.stamina -= dt * drain; b.fleeing = 0.2; }
+      }
+    },
+    tryMove: function (g, r, b, mx, my) {
+      if (Math.abs(mx) < 1e-3 && Math.abs(my) < 1e-3) return false;
+      var nx = b.bx + mx, ny = b.by + my, ox = b.x - b.bx, oy = b.y - b.by; // other rules' offsets carry over
+      var x = nx + ox, y = ny + oy;
+      if (x < g.wallL + 1 || x + b.w > g.wallR - 1 || y < C.TOP + 3 || y + b.h > r.p.maxY) return false;
+      if (g.rectBlocked(x, y, b.w, b.h, b, 1)) return false;
+      if (g.ballNear(x, y, b.w, b.h, 1.5)) return false;
+      b.bx = nx; b.by = ny; b.x = x; b.y = y;
+      return true;
+    },
+    onBrickDestroyed: function (g, r, b) {
+      if (!b.runner) return;
+      r.s.idle = 0;
+      if (b.stamina > 0 && b.fleeing > 0) g.fx.text(b.x + b.w / 2, b.y - 6, 'Caught!', '#ffe27a');
+    },
+    renderOverBricks: function (ctx, g, r) {
+      ctx.save();
+      for (var i = 0; i < g.bricks.length; i++) {
+        var b = g.bricks[i];
+        if (!b.alive || !b.runner) continue;
+        var cx = b.x + b.w / 2, cy = b.y + b.h / 2 - 0.5;
+        if (b.stamina <= 0) { // tired: closed eyes
+          ctx.strokeStyle = 'rgba(10,12,30,0.8)'; ctx.lineWidth = 1.5;
+          ctx.beginPath(); ctx.moveTo(cx - 8, cy); ctx.lineTo(cx - 3, cy); ctx.moveTo(cx + 3, cy); ctx.lineTo(cx + 8, cy); ctx.stroke();
+          continue;
+        }
+        var wide = b.fleeing > 0;
+        for (var k = -1; k <= 1; k += 2) {
+          ctx.fillStyle = '#ffffff';
+          ctx.beginPath(); ctx.arc(cx + k * 5.5, cy, wide ? 3.6 : 3, 0, TAU); ctx.fill();
+          ctx.fillStyle = '#10131f';
+          ctx.beginPath(); ctx.arc(cx + k * 5.5 + b.look * 1.4, cy + 0.3, 1.6, 0, TAU); ctx.fill();
+        }
+        if (wide) { ctx.fillStyle = 'rgba(160,220,255,0.9)'; ctx.beginPath(); ctx.arc(b.x + b.w - 2, b.y + 2, 1.8, 0, TAU); ctx.fill(); }
+        // stamina: a small bar under the brick once it has started to tire
+        if (b.stamina < b.maxStamina) {
+          ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(b.x + 3, b.y + b.h - 3, b.w - 6, 2);
+          ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.fillRect(b.x + 3, b.y + b.h - 3, (b.w - 6) * b.stamina / b.maxStamina, 2);
+        }
+      }
+      ctx.restore();
+    }
+  });
+
+  // ---------------- Big and Small: a big slow ball ploughs; splitters (grid X) split it into small fast ones ----------------
+  // The big ball burns through up to bigPierce soft bricks per trip (armour stops it). Hitting a splitter
+  // turns it into `split` small fast balls. When only one small ball is left it grows big again on the paddle.
+  register('bigsmall', {
+    init: function (g, r) {
+      for (var i = 0; i < g.bricks.length; i++) if (g.bricks[i].maxHp > 1) g.bricks[i].noPierce = true;
+      r.s.cd = 0;
+    },
+    makeBig: function (g, r, b) { b.r = r.p.bigR; b.sizeMul = r.p.bigSpeed; b.kind = 'big'; b.pierce = r.p.bigPierce; },
+    makeSmall: function (g, r, b) { b.r = r.p.smallR; b.sizeMul = r.p.smallSpeed; b.kind = 'small'; b.pierce = 0; },
+    onServeBall: function (g, r, b) { this.makeBig(g, r, b); },
+    update: function (g, r, dt) {
+      if (r.s.cd > 0) r.s.cd -= dt;
+      for (var i = 0; i < g.balls.length; i++) if (!g.balls[i].kind) this.makeSmall(g, r, g.balls[i]); // e.g. from a Multi capsule
+    },
+    onPaddleHit: function (g, r, b) {
+      if (b.kind === 'big') { b.pierce = r.p.bigPierce; return; }
+      var n = 0;
+      for (var i = 0; i < g.balls.length; i++) if (!g.balls[i].dead) n++;
+      if (n === 1 && b.kind === 'small') {
+        this.makeBig(g, r, b);
+        b.y = g.paddle.y - g.paddle.h / 2 - b.r;
+        g.normalizeBall(b);
+        g.fx.sound('grow');
+        g.fx.text(b.x, b.y - 18, 'Big again!', '#c56bff');
+      }
+    },
+    onBrickHit: function (g, r, k, ball) {
+      if (k.type !== 'splitter') return false;
+      k.flash = 0.2;
+      if (!ball || ball.kind !== 'big' || r.s.cd > 0) { g.fx.sound('gate'); return true; }
+      r.s.cd = r.p.splitCooldown;
+      this.makeSmall(g, r, ball);
+      for (var i = 1; i < r.p.split && g.balls.length < C.ball.maxBalls; i++) {
+        var nb = g.newBall(ball.x, ball.y, ball.vx, ball.vy);
+        this.makeSmall(g, r, nb);
+        P.rotateVel(nb, (i % 2 ? 1 : -1) * Math.ceil(i / 2) * 28 * P.DEG);
+        g.normalizeBall(nb);
+      }
+      g.normalizeBall(ball);
+      g.sinceHit = 0;
+      g.fx.sound('split');
+      g.fx.burst(k.x + k.w / 2, k.y + k.h / 2, '#c56bff', 14, 'spark');
+      g.fx.text(k.x + k.w / 2, k.y - 8, 'Split!', '#e0c0ff');
+      return true;
+    },
+    render: function (ctx, g, r, layer) {
+      if (layer !== 'front') return;
+      ctx.save();
+      for (var i = 0; i < g.balls.length; i++) {
+        var b = g.balls[i];
+        if (b.kind !== 'big') continue;
+        // heavy ball: a dark band and rivets, so it reads as big and heavy, not just bigger
+        ctx.strokeStyle = 'rgba(90,60,140,0.8)'; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(b.x, b.y, b.r - 3, 0, TAU); ctx.stroke();
+        ctx.fillStyle = 'rgba(90,60,140,0.9)';
+        for (var k = 0; k < 4; k++) { var a = k * TAU / 4 + g.t * 2; ctx.beginPath(); ctx.arc(b.x + Math.cos(a) * (b.r - 3), b.y + Math.sin(a) * (b.r - 3), 1.6, 0, TAU); ctx.fill(); }
+      }
+      ctx.restore();
+    }
+  });
+
+  // ---------------- Closing Walls: the side walls creep inward; pushers (grid H) shove them back ----------------
+  // The walls never come closer than `gap` px to a standing brick (so the ball can always pass) and never
+  // further in than maxIn, so the field is always wider than the paddle. The paddle and ball are kept inside.
+  register('walls', {
+    init: function (g, r) { r.s.inset = 0; r.s.shoveLeft = 0; r.s.cool = 0; r.s.push = 0; r.s.danger = 0; },
+    limit: function (g, r) {
+      var p = r.p, lim = p.maxIn;
+      for (var i = 0; i < g.bricks.length; i++) {
+        var b = g.bricks[i];
+        if (!b.alive || !b.solid) continue;
+        lim = Math.min(lim, b.x - p.gap, C.W - (b.x + b.w) - p.gap);
+      }
+      return Math.max(0, lim);
+    },
+    update: function (g, r, dt) {
+      var s = r.s, p = r.p;
+      if (s.cool > 0) s.cool -= dt;
+      if (s.push > 0) s.push -= dt;
+      if (g.hazardsActive(p.grace)) s.inset += p.speed * g.preset.hazardScale * dt;
+      if (s.shoveLeft > 0) { var m = Math.min(s.shoveLeft, 140 * dt); s.inset -= m; s.shoveLeft -= m; }
+      s.inset = P.clamp(s.inset, 0, this.limit(g, r));
+      s.danger = s.inset / p.maxIn;
+      g.wallL = s.inset; g.wallR = C.W - s.inset;
+      // the paddle is pushed along by a wall straight away (the ball is kept inside as it moves)
+      var pd = g.paddle, hw = pd.w / 2;
+      if (pd.x - hw < g.wallL) pd.x = g.wallL + hw; else if (pd.x + hw > g.wallR) pd.x = g.wallR - hw;
+      g.clampTarget();
+    },
+    onBrickHit: function (g, r, b) {
+      if (b.type !== 'pusher') return false;
+      b.flash = 0.2;
+      if (r.s.cool <= 0) {
+        r.s.shoveLeft += r.p.shove; r.s.cool = r.p.shoveCooldown; r.s.push = 0.4;
+        g.fx.sound('shove');
+        g.fx.text(b.x + b.w / 2, b.y - 6, 'Back!', '#ffd59a');
+        g.fx.burst(b.x + b.w / 2, b.y + b.h / 2, '#ffb347', 8, 'spark');
+      }
+      g.sinceHit = 0;
+      return true;
+    },
+    onLifeLost: function (g, r) { r.s.inset = Math.max(0, r.s.inset - r.p.reliefOnLife); r.s.shoveLeft = 0; },
+    render: function (ctx, g, r, layer) {
+      if (layer !== 'back') return;
+      var s = r.s, p = r.p, w = s.inset;
+      ctx.save();
+      // the furthest the walls can come: faint marks on the floor
+      ctx.strokeStyle = 'rgba(255,180,90,0.25)'; ctx.setLineDash([4, 6]); ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(p.maxIn, C.TOP); ctx.lineTo(p.maxIn, C.H); ctx.moveTo(C.W - p.maxIn, C.TOP); ctx.lineTo(C.W - p.maxIn, C.H); ctx.stroke();
+      ctx.setLineDash([]);
+      if (w > 0.5) {
+        for (var side = 0; side < 2; side++) {
+          var x0 = side ? C.W - w : 0;
+          ctx.fillStyle = '#3a4152'; ctx.fillRect(x0, C.TOP, w, C.H - C.TOP);
+          // hazard stripes on the inner edge, red-tinged as the walls get close
+          var ex = side ? x0 : x0 + w - 6;
+          ctx.fillStyle = s.danger > 0.75 ? 'rgba(255,90,90,0.85)' : '#ffb347';
+          ctx.fillRect(ex, C.TOP, 6, C.H - C.TOP);
+          ctx.fillStyle = '#222833';
+          for (var y = C.TOP - ((g.t * 10) % 16); y < C.H; y += 16) {
+            ctx.beginPath(); ctx.moveTo(ex, y); ctx.lineTo(ex + 6, y + 6); ctx.lineTo(ex + 6, y + 10); ctx.lineTo(ex, y + 4); ctx.closePath(); ctx.fill();
+          }
+          // arrows: which way the wall is going (in, or back out after a shove)
+          ctx.fillStyle = s.push > 0 ? 'rgba(160,255,190,0.8)' : 'rgba(255,255,255,0.35)';
+          var dir = (side ? -1 : 1) * (s.push > 0 ? -1 : 1), axc = side ? x0 + w / 2 : x0 + w / 2 - 3;
+          if (w > 14) for (var k = 0; k < 4; k++) {
+            var ay = 160 + k * 120;
+            ctx.beginPath(); ctx.moveTo(axc + dir * 5, ay); ctx.lineTo(axc - dir * 3, ay - 6); ctx.lineTo(axc - dir * 3, ay + 6); ctx.closePath(); ctx.fill();
+          }
+        }
+      }
+      ctx.restore();
+    }
+  });
+
+  // ---------------- Hall of Mirrors: angled panels deflect the ball, and flip when struck ----------------
+  // params: mirrors [{ x, y, dir }] (dir 1 = '/', -1 = '\'). A ball going up into '/' turns right, into '\'
+  // turns left (and so on round: always a ninety-degree turn). A panel flips once the ball has left it, so the
+  // next ball through goes the other way. A ball that has bounced off maxChain panels without touching a
+  // brick or the paddle passes through panels until it does, so there can be no endless mirror loop.
+  register('mirrors', {
+    init: function (g, r) {
+      var p = r.p;
+      r.s.list = [];
+      r.s.len = g.presetName === 'easy' ? p.lenEasy : p.len;
+      for (var i = 0; i < p.mirrors.length; i++) {
+        var m = p.mirrors[i];
+        var d = g.addDeflector({ x: m.x, y: m.y, len: r.s.len, thick: p.thick, ang: this.angOf(m.dir), owner: r });
+        d.dir = m.dir; d.flip = false; d.spin = 0; d.flash = 0;
+        r.s.list.push(d);
+      }
+    },
+    angOf: function (dir) { return dir > 0 ? -Math.PI / 4 : Math.PI / 4; },
+    canDeflect: function (g, r, ball) { return ball.deflectChain < r.p.maxChain; },
+    // A clean ninety-degree turn: a ball travelling mostly up/down leaves sideways (still drifting a little
+    // the way it was going), one travelling mostly sideways leaves up/down. So the panel's slant alone tells
+    // you where the ball goes, whatever angle it came in at.
+    onDeflect: function (g, r, ball, d, ivx, ivy) {
+      var sp = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy), f = C.ball.minVyFrac, lean = 0.2;
+      if (Math.abs(ivy) >= Math.abs(ivx)) {
+        ball.vx = (ball.vx < 0 ? -1 : 1) * sp * Math.sqrt(1 - f * f);
+        ball.vy = (ivy < 0 ? -1 : 1) * sp * f;
+      } else {
+        ball.vy = (ball.vy < 0 ? -1 : 1) * sp * Math.sqrt(1 - lean * lean);
+        ball.vx = (ivx < 0 ? -1 : 1) * sp * lean;
+      }
+      ball.deflectChain++;
+      d.flip = true; d.flash = 0.2;
+      g.fx.sound('mirror');
+    },
+    onPaddleHit: function (g, r, ball) { ball.deflectChain = 0; },
+    onBrickHit: function (g, r, k, ball) { if (ball) ball.deflectChain = 0; return false; },
+    update: function (g, r, dt) {
+      var p = r.p;
+      for (var i = 0; i < r.s.list.length; i++) {
+        var d = r.s.list[i];
+        if (d.flash > 0) d.flash -= dt;
+        if (d.spin > 0) d.spin = Math.max(0, d.spin - dt * 6);
+        if (d.flip && !g.ballNear(d.x - d.len / 2, d.y - d.len / 2, d.len, d.len, p.flipClear)) {
+          d.flip = false; d.dir = -d.dir; d.ang = this.angOf(d.dir); d.spin = 1;
+        }
+      }
+    },
+    render: function (ctx, g, r, layer) {
+      if (layer !== 'back') return;
+      var p = r.p, half = r.s.len / 2;
+      ctx.save();
+      for (var i = 0; i < r.s.list.length; i++) {
+        var d = r.s.list[i], a = d.ang + d.spin * (Math.PI / 2) * (d.dir > 0 ? 1 : -1);
+        var c = Math.cos(a), s = Math.sin(a);
+        // mount
+        ctx.fillStyle = 'rgba(255,255,255,0.06)';
+        ctx.beginPath(); ctx.arc(d.x, d.y, half + 3, 0, TAU); ctx.fill();
+        ctx.lineCap = 'round';
+        ctx.strokeStyle = d.flash > 0 ? '#ffffff' : '#b9c6e0'; ctx.lineWidth = p.thick + 2;
+        ctx.beginPath(); ctx.moveTo(d.x - c * half, d.y - s * half); ctx.lineTo(d.x + c * half, d.y + s * half); ctx.stroke();
+        ctx.strokeStyle = '#eaf6ff'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(d.x - c * (half - 3), d.y - s * (half - 3)); ctx.lineTo(d.x + c * (half - 3), d.y + s * (half - 3)); ctx.stroke();
+        if (d.spin > 0) continue;
+        // arrow: where a ball coming up from below goes ('/' sends it right, '\' left)
+        var ax = d.x + d.dir * (half * 0.55 + 8), ay = d.y + 10;
+        ctx.fillStyle = 'rgba(185,198,224,0.75)';
+        ctx.beginPath(); ctx.moveTo(ax + d.dir * 6, ay); ctx.lineTo(ax - d.dir * 2, ay - 5); ctx.lineTo(ax - d.dir * 2, ay + 5); ctx.closePath(); ctx.fill();
       }
       ctx.restore();
     }

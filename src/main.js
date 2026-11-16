@@ -12,6 +12,8 @@
     overlay: null,        // null | banner | pause | won | lost
     game: null, level: null, world: null,
     acc: 0, last: 0, t: 0, overlayT: 0, endT: 0, starSfx: [false, false, false],
+    // level select list: scroll offset, fling speed, and the press being tracked (tap fires on release)
+    sel: { scroll: 0, vel: 0, press: null },
 
     boot: function () {
       this.canvas = document.getElementById('game');
@@ -26,6 +28,7 @@
         if (document.hidden) { self.autoPause(); BT.Audio.suspend(); }
       });
       this.resize();
+      this.sel.scroll = BT.UI.scrollFor(this.furthestUnlocked(), 0);
       this.last = performance.now();
       requestAnimationFrame(function f(now) { self.frame(now); requestAnimationFrame(f); });
     },
@@ -75,8 +78,56 @@
     },
 
     toSelect: function () {
+      var from = this.level ? this.level.id : this.furthestUnlocked();
+      if (this.overlay === 'won' || this.overlay === 'ending') from = Math.min(BT.LEVELS.length, from + 1);
       this.scene = 'select'; this.overlay = null; this.game = null;
+      this.sel.vel = 0; this.sel.press = null;
+      this.sel.scroll = BT.UI.scrollFor(from, this.sel.scroll);
       this.canvas.style.cursor = 'default';
+    },
+
+    furthestUnlocked: function () {
+      var id = 1;
+      for (var i = 0; i < BT.LEVELS.length; i++) if (BT.Save.isUnlocked(BT.LEVELS[i].id)) id = BT.LEVELS[i].id;
+      return id;
+    },
+
+    // ---------------- level select scrolling ----------------
+    // A press on the list only becomes a tap when it is released without having dragged, so scrolling
+    // can never start a level. A press that catches a moving list just stops it.
+    selDown: function (x, y, id) {
+      this.sel.press = { id: id, x: x, y: y, moved: 0, stopper: Math.abs(this.sel.vel) > 60, t: performance.now() };
+      this.sel.vel = 0;
+    },
+    selMove: function (dy, dist, id) {
+      var p = this.sel.press;
+      if (!p || p.id !== id) return;
+      p.moved += dist;
+      if (p.moved < C.touch.tapMaxMove) return;
+      this.scrollBy(-dy);
+      var now = performance.now(), dt = Math.max(1, now - p.t) / 1000;
+      this.sel.vel = this.sel.vel * 0.3 + (-dy / dt) * 0.7;
+      p.t = now;
+    },
+    selUp: function (x, y, id, cancelled) {
+      var p = this.sel.press;
+      if (!p || p.id !== id) return;
+      this.sel.press = null;
+      if (cancelled || p.moved >= C.touch.tapMaxMove) return;
+      this.sel.vel = 0;
+      if (p.stopper) return;
+      var act = BT.UI.hit(x, y);
+      if (act) this.doAction(act);
+    },
+    scrollBy: function (d) {
+      var max = BT.UI.maxScroll();
+      this.sel.scroll = Math.max(0, Math.min(max, this.sel.scroll + d));
+    },
+    onWheel: function (dy) {
+      if (this.scene !== 'select' || this.overlay) return false;
+      this.sel.vel = 0;
+      this.scrollBy(dy);
+      return true;
     },
 
     autoPause: function () {
@@ -87,7 +138,8 @@
     onBlur: function () { this.autoPause(); },
 
     // ---------------- input from Input ----------------
-    onPress: function (x, y) {
+    onPress: function (x, y, id) {
+      if (this.scene === 'select' && !this.overlay) { this.selDown(x, y, id); return true; }
       var act = null;
       if (this.scene === 'select' || this.overlay) act = BT.UI.hit(x, y);
       else if (this.scene === 'play' && x > C.W - 52 && y < C.TOP) act = 'pause';
@@ -101,6 +153,7 @@
         if (this.overlay === 'banner') return this.doAction('dismissBanner');
         if (this.overlay === 'pause') return this.doAction('resume');
         if (this.overlay === 'won' && a === 'enter') return this.doAction(BT.levelById(this.level.id + 1) ? 'next' : 'levels');
+        if (this.overlay === 'ending' && a === 'enter') return this.doAction('levels');
         if (this.overlay === 'lost' && a === 'enter') return this.doAction('restart');
         var g = this.activeGame();
         if (g) g.tap();
@@ -161,11 +214,18 @@
               BT.Save.record(this.level.id, g.result.stars, g.result.score);
               this.starSfx = [false, false, false];
             }
-            this.overlay = g.state; this.overlayT = 0; this.canvas.style.cursor = 'default';
+            this.overlay = g.state === 'won' && this.level.final ? 'ending' : g.state;
+            this.overlayT = 0; this.canvas.style.cursor = 'default';
           }
         }
       } else {
         BT.Particles.update(dt);
+      }
+      if (this.scene === 'select' && !this.sel.press && this.sel.vel) { // fling
+        this.scrollBy(this.sel.vel * dt);
+        this.sel.vel *= Math.pow(0.04, dt);
+        var sc = this.sel.scroll;
+        if (Math.abs(this.sel.vel) < 8 || sc <= 0 || sc >= BT.UI.maxScroll()) this.sel.vel = 0;
       }
       this.render();
     },
@@ -191,6 +251,7 @@
         if (this.overlay === 'banner') BT.UI.drawBanner(ctx, this, this.overlayT);
         else if (this.overlay === 'pause') BT.UI.drawPause(ctx, this);
         else if (this.overlay === 'won') BT.UI.drawWon(ctx, this, this.overlayT);
+        else if (this.overlay === 'ending') BT.UI.drawEnding(ctx, this, this.overlayT);
         else if (this.overlay === 'lost') BT.UI.drawLost(ctx, this);
       }
       ctx.restore();

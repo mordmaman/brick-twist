@@ -17,6 +17,10 @@
       canvas.addEventListener('pointerup', function (e) { self.up(e, false); }, opt);
       canvas.addEventListener('pointercancel', function (e) { self.up(e, true); }, opt);
       canvas.addEventListener('lostpointercapture', function (e) { if (e.pointerId === self.dragId) self.dragId = null; });
+      canvas.addEventListener('wheel', function (e) { // mouse wheel / trackpad scrolls the level list
+        var d = e.deltaY * (e.deltaMode === 1 ? 16 : (e.deltaMode === 2 ? 400 : 1)) / self.app.view.scale;
+        if (self.app.onWheel(d) && e.cancelable) e.preventDefault();
+      }, opt);
       // block scrolling, pull-to-refresh, double-tap zoom, pinch zoom, long-press menus
       var stop = function (e) { if (e.cancelable) e.preventDefault(); };
       ['touchstart', 'touchmove', 'touchend', 'gesturestart', 'gesturechange', 'dblclick', 'contextmenu'].forEach(function (n) {
@@ -44,7 +48,7 @@
       var p = { x: this.lx, y: this.ly, lastX: this.lx, lastY: this.ly, t: performance.now(), moved: 0, mouse: mouse, consumed: false };
       this.ptrs[e.pointerId] = p;
       if (mouse && e.button !== 0) { p.consumed = true; return; }
-      if (this.app.onPress(this.lx, this.ly)) { p.consumed = true; return; }
+      if (this.app.onPress(this.lx, this.ly, e.pointerId)) { p.consumed = true; return; }
       var g = this.app.activeGame();
       if (!g) return;
       if (mouse) { g.pointTo(this.lx); g.tap(); p.consumed = true; return; }
@@ -56,21 +60,20 @@
       if (e.cancelable) e.preventDefault();
       this.toLogical(e);
       var g = this.app.activeGame();
-      if (e.pointerType === 'mouse') {
-        if (g) g.pointTo(this.lx);
-        return;
-      }
+      if (e.pointerType === 'mouse' && g) { g.pointTo(this.lx); return; }
       var p = this.ptrs[e.pointerId];
       if (!p) return;
-      var dx = this.lx - p.lastX;
-      p.moved += Math.abs(dx) + Math.abs(this.ly - p.lastY);
+      var dx = this.lx - p.lastX, dy = this.ly - p.lastY, dist = Math.abs(dx) + Math.abs(dy);
+      p.moved += dist;
       p.lastX = this.lx; p.lastY = this.ly;
+      if (p.consumed) this.app.selMove(dy, dist, e.pointerId);
       if (g && e.pointerId === this.dragId && !p.consumed) g.dragBy(dx);
     },
 
     up: function (e, cancelled) {
       var p = this.ptrs[e.pointerId];
       delete this.ptrs[e.pointerId];
+      if (p) { this.toLogical(e); this.app.selUp(this.lx, this.ly, e.pointerId, cancelled); }
       if (e.pointerId === this.dragId) {
         this.dragId = null;
         // hand the drag to another finger that is still down, so two-thumb play works

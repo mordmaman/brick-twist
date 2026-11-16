@@ -106,6 +106,18 @@
         case 'drop': this.tone('sine', 900, 500, 0.12, 0.08); break;
         case 'land': this.tone('square', 140, 110, 0.07, 0.14); this.hiss(0.06, 0.1, 'lowpass', 700); break;
         case 'retry': this.tone('triangle', 392, 392, 0.08, 0.14); this.tone('triangle', 523, 523, 0.12, 0.14, 0.08); break;
+        case 'thaw': this.tone('sine', 1800, 1200, 0.08, 0.1); this.hiss(0.08, 0.1, 'highpass', 4000); break;
+        case 'splash': this.hiss(0.25, 0.12, 'bandpass', 900, 0, 1.5); this.tone('sine', 500, 250, 0.12, 0.06); break;
+        case 'sizzle': this.hiss(0.5, 0.14, 'highpass', 3000); this.tone('sawtooth', 220, 440, 0.25, 0.06); break;
+        case 'fizz': this.hiss(0.3, 0.1, 'bandpass', 2000, 0, 2); break;
+        case 'rumble': this.hiss(0.9, 0.18, 'lowpass', 220); this.tone('sine', 60, 45, 0.8, 0.12); break;
+        case 'thunder': this.hiss(0.6, 0.45, 'lowpass', 1600); this.tone('square', 90, 40, 0.4, 0.15); break;
+        case 'zap': this.tone('sawtooth', 1200, 200, 0.18, 0.1); this.tone('square', 900, 150, 0.15, 0.06, 0.03); break;
+        case 'split': this.tone('square', 600, 900, 0.07, 0.12); this.tone('square', 750, 1100, 0.07, 0.1, 0.05); this.tone('square', 900, 1300, 0.07, 0.08, 0.1); break;
+        case 'mirror': this.tone('sine', 1500, 1700, 0.06, 0.1); break;
+        case 'revive': this.tone('sine', 220, 660, 0.4, 0.16); break;
+        case 'drip': this.tone('sine', 1200, 600, 0.09, 0.12); break;
+        case 'puff': this.hiss(0.12, 0.12, 'lowpass', 1200); break;
       }
     }
   };

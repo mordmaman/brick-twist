@@ -14,6 +14,9 @@
 //   S                   switch (Red/Blue: hit to swap colours; unbreakable, not needed to clear)
 //   V                   vine (Overgrown: regrows from its root)
 //   O                   root (Overgrown: armoured; kill it and its vines wither)
+//   I                   frozen brick (one hit thaws it, the next breaks it)
+//   X                   splitter (Big and Small: splits the big ball; unbreakable, not needed to clear)
+//   H                   pusher (Closing Walls: hit to shove the walls back out; unbreakable)
 (function (BT) {
   'use strict';
 
@@ -34,6 +37,9 @@
   var SWITCH_COLOR = '#d8dcea';
   var VINE_COLOR = '#3fcf6a';
   var ROOT_COLOR = '#8a5a34';
+  var ICE_COLOR = '#58c6ff';      // the colour underneath once a frozen brick has thawed
+  var SPLITTER_COLOR = '#c56bff';
+  var PUSHER_COLOR = '#ffb347';
 
   function make(type, x, y, w, h) {
     return {
@@ -86,6 +92,12 @@
         b = make('vine', x, y, w, h); b.color = VINE_COLOR; return b;
       case 'O':
         b = make('root', x, y, w, h); b.hp = b.maxHp = 3; b.color = ROOT_COLOR; return b;
+      case 'I':
+        b = make('ice', x, y, w, h); b.hp = b.maxHp = 2; b.color = ICE_COLOR; return b;
+      case 'X':
+        b = make('splitter', x, y, w, h); b.breakable = false; b.required = false; b.noBlast = true; b.color = SPLITTER_COLOR; return b;
+      case 'H':
+        b = make('pusher', x, y, w, h); b.breakable = false; b.required = false; b.noBlast = true; b.color = PUSHER_COLOR; return b;
     }
     return null;
   }
@@ -97,7 +109,8 @@
     COLORS: COLORS, ARMOUR_COLOR: ARMOUR_COLOR, STEEL_COLOR: STEEL_COLOR, TNT_COLOR: TNT_COLOR,
     KEY_COLOR: KEY_COLOR, LOCK_COLOR: LOCK_COLOR, ANCHOR_COLOR: ANCHOR_COLOR,
     GLOW_COLOR: GLOW_COLOR, RED_COLOR: RED_COLOR, BLUE_COLOR: BLUE_COLOR, VINE_COLOR: VINE_COLOR, ROOT_COLOR: ROOT_COLOR,
+    ICE_COLOR: ICE_COLOR, SPLITTER_COLOR: SPLITTER_COLOR, PUSHER_COLOR: PUSHER_COLOR,
     make: make, fromChar: fromChar, isHardWall: isHardWall,
-    LEGEND: '.rroygcbpmw23#TKLCAGRBSVO'
+    LEGEND: '.rroygcbpmw23#TKLCAGRBSVOIXH'
   };
 })(typeof window !== 'undefined' ? (window.BT = window.BT || {}) : (globalThis.BT = globalThis.BT || {}));

@@ -805,6 +805,558 @@
       ctx.restore();
     }
   });
+  // ======================= The Twins =======================
+  // Two linked cores, each inside a turning ring of bricks. Only the awake twin (eyes open, gold outline) can
+  // be hurt; they take turns, with a blinking warning before they swap. Knock one out and the other wakes
+  // and stays awake: knock it out too before the countdown runs out, or the first one gets back up.
+  register('twins', {
+    boss: true, bossName: 'The Twins',
+    init: function (g, r) {
+      var s = r.s, p = r.p;
+      var per = Math.max(2, Math.round(p.hp * g.preset.bossHpScale));
+      s.cores = [];
+      var pos = r.p.pos || [{ x: 92, y: 176 }, { x: 268, y: 176 }];
+      for (var k = 0; k < 2; k++) {
+        var c = { x: pos[k].x, y: pos[k].y, y0: pos[k].y, hp: per, maxHp: per, down: false, revive: 0, flash: 0, cd: 0, ring: [], spin: k ? -1 : 1 };
+        var pat = k ? (r.p.ringB || 'm2m.m2m.') : (r.p.ringA || 'c2c.c2c.');
+        for (var i = 0; i < pat.length; i++) {
+          var b = BT.Bricks.fromChar(pat[i], 0, 0, 16, 16);
+          if (!b) continue;
+          b.owner = r; b.required = false; b.a0 = i / pat.length * TAU; b.twin = k;
+          g.addBrick(b); c.ring.push(b);
+        }
+        s.cores.push(c);
+      }
+      s.per = per; s.maxHp = per * 2; s.hp = s.maxHp; s.defeated = false;
+      s.awake = 0; s.swapT = p.swapEvery; s.t = 0; s.zzz = 0;
+      this.place(g, r);
+    },
+    place: function (g, r) {
+      var s = r.s, p = r.p;
+      for (var k = 0; k < 2; k++) {
+        var c = s.cores[k];
+        c.y = c.y0 + Math.sin(s.t * 1.3 + k * Math.PI) * p.bob;
+        for (var i = 0; i < c.ring.length; i++) {
+          var b = c.ring[i], a = b.a0 + s.t * p.ringSpin * c.spin;
+          b.bx = c.x + Math.cos(a) * p.ringRadius - b.w / 2; b.by = c.y + Math.sin(a) * p.ringRadius - b.h / 2;
+        }
+      }
+    },
+    reviveTime: function (g, r) { return g.presetName === 'easy' ? r.p.reviveEasy : r.p.revive / Math.sqrt(g.preset.hazardScale); },
+    vulnerable: function (r, k) {
+      var s = r.s, c = s.cores[k], o = s.cores[1 - k];
+      if (c.down) return false;
+      if (o.down) return true;
+      return s.awake === k;
+    },
+    update: function (g, r, dt) {
+      var s = r.s, p = r.p, k;
+      if (s.defeated) return;
+      s.t += dt * (g.state === 'play' ? 1 : 0.5);
+      if (s.zzz > 0) s.zzz -= dt;
+      this.place(g, r);
+      for (k = 0; k < 2; k++) {
+        var c = s.cores[k];
+        if (c.flash > 0) c.flash -= dt;
+        if (c.cd > 0) c.cd -= dt;
+        if (c.down && g.state === 'play') {
+          c.revive -= dt;
+          if (c.revive <= 0) {
+            c.down = false; c.hp = Math.max(1, Math.ceil(c.maxHp * p.reviveHpFrac));
+            g.fx.sound('revive');
+            g.fx.text(c.x, c.y - 34, 'Back up!', '#ff8a94');
+            s.awake = 1 - k; s.swapT = p.swapEvery;
+          }
+        }
+      }
+      var anyDown = s.cores[0].down || s.cores[1].down;
+      if (!anyDown && g.state === 'play') {
+        s.swapT -= dt;
+        if (s.swapT <= 0) { s.awake = 1 - s.awake; s.swapT = p.swapEvery; g.fx.sound('swap'); }
+      }
+      s.hp = (s.cores[0].down ? 0 : s.cores[0].hp) + (s.cores[1].down ? 0 : s.cores[1].hp);
+    },
+    onBallStep: function (g, r, ball) {
+      var s = r.s;
+      if (s.defeated) return;
+      for (var k = 0; k < 2; k++) {
+        var c = s.cores[k];
+        if (P.circleCircle(ball.x, ball.y, ball.r, c.x, c.y, r.p.bodyRadius) > 0) {
+          ball.x += HIT.nx * HIT.depth; ball.y += HIT.ny * HIT.depth;
+          P.reflect(ball, HIT.nx, HIT.ny);
+          this.hit(g, r, k);
+        }
+      }
+    },
+    onLaser: function (g, r, L) {
+      var s = r.s;
+      if (s.defeated) return false;
+      for (var k = 0; k < 2; k++) {
+        var c = s.cores[k], dx = L.x - c.x, dy = L.y - c.y;
+        if (dx * dx + dy * dy < r.p.bodyRadius * r.p.bodyRadius) { this.hit(g, r, k); return true; }
+      }
+      return false;
+    },
+    hit: function (g, r, k) {
+      var s = r.s, c = s.cores[k], o = s.cores[1 - k];
+      if (c.cd > 0) return;
+      c.cd = 0.25;
+      if (!this.vulnerable(r, k)) {
+        g.fx.sound('steel'); c.flash = 0.08;
+        if (s.zzz <= 0 && !c.down) { s.zzz = 2; g.fx.text(c.x, c.y - 30, 'Zzz... hit the awake one!', '#c9d6ee'); }
+        return;
+      }
+      c.hp--; c.flash = 0.25;
+      g.sinceHit = 0; g.score += C.score.bossHit;
+      g.fx.sound('bosshit'); g.fx.shake(3); g.shakeAmt = Math.max(g.shakeAmt, 3);
+      g.fx.burst(c.x, c.y, k ? '#ff6bcb' : '#4fd8ff', 12, 'spark');
+      if (c.hp > 0) return;
+      if (o.down) { // both down together: beaten
+        c.down = true;
+        bossDefeated(g, r, (c.x + o.x) / 2, c.y);
+        shatterOwned(g, r);
+        return;
+      }
+      c.down = true; c.revive = this.reviveTime(g, r);
+      g.fx.sound('unlock');
+      g.fx.text(o.x, o.y - 36, 'Quick! Now this one!', '#ffe27a');
+    },
+    render: function (ctx, g, r, layer, R) {
+      var s = r.s, p = r.p, k;
+      if (s.defeated) return;
+      ctx.save();
+      if (layer === 'back') {
+        // the link between them: energy flowing towards a knocked-out twin
+        var a = s.cores[0], b = s.cores[1];
+        ctx.strokeStyle = 'rgba(255,220,140,0.35)'; ctx.lineWidth = 3; ctx.setLineDash([6, 8]);
+        var flow = a.down ? 1 : (b.down ? -1 : 0);
+        ctx.lineDashOffset = -g.t * 30 * flow;
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.quadraticCurveTo(C.W / 2, Math.min(a.y, b.y) - 60, b.x, b.y); ctx.stroke();
+        ctx.setLineDash([]);
+        for (k = 0; k < 2; k++) {
+          var c = s.cores[k];
+          ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.arc(c.x, c.y, p.ringRadius, 0, TAU); ctx.stroke();
+        }
+        ctx.restore(); return;
+      }
+      var Rb = p.bodyRadius;
+      for (k = 0; k < 2; k++) {
+        var cc = s.cores[k], vul = this.vulnerable(r, k), col = k ? '#ff6bcb' : '#4fd8ff';
+        var warn = !cc.down && !s.cores[1 - k].down && s.swapT < p.warn && Math.floor(g.t * 8) % 2 === 0;
+        ctx.fillStyle = cc.flash > 0 ? '#ffffff' : (cc.down ? '#3a3f52' : (vul ? col : '#6b7390'));
+        ctx.beginPath(); ctx.arc(cc.x, cc.y, Rb, 0, TAU); ctx.fill();
+        ctx.lineWidth = vul ? 3 : 2;
+        ctx.strokeStyle = vul ? (warn ? '#ffffff' : '#ffe27a') : (warn ? '#ffe27a' : 'rgba(255,255,255,0.4)');
+        ctx.stroke();
+        // face: open eyes when awake (can be hurt), closed when asleep, X when knocked out
+        ctx.strokeStyle = '#10131f'; ctx.fillStyle = '#10131f'; ctx.lineWidth = 2;
+        for (var e = -1; e <= 1; e += 2) {
+          var ex = cc.x + e * 7, ey = cc.y - 3;
+          if (cc.down) { ctx.beginPath(); ctx.moveTo(ex - 3, ey - 3); ctx.lineTo(ex + 3, ey + 3); ctx.moveTo(ex + 3, ey - 3); ctx.lineTo(ex - 3, ey + 3); ctx.stroke(); }
+          else if (vul) { ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(ex, ey, 4, 0, TAU); ctx.fill(); ctx.fillStyle = '#10131f'; ctx.beginPath(); ctx.arc(ex, ey + 1, 2, 0, TAU); ctx.fill(); }
+          else { ctx.beginPath(); ctx.arc(ex, ey - 1, 3, 0.2, Math.PI - 0.2); ctx.stroke(); }
+        }
+        if (!cc.down) { // hp pips
+          ctx.fillStyle = '#ffe27a';
+          for (var h = 0; h < cc.hp; h++) { ctx.beginPath(); ctx.arc(cc.x - (cc.hp - 1) * 3.5 + h * 7, cc.y + 9, 2, 0, TAU); ctx.fill(); }
+        }
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        if (cc.down) { // revive countdown: draining ring and seconds
+          var f = Math.max(0, cc.revive / this.reviveTime(g, r));
+          ctx.strokeStyle = '#ff8a94'; ctx.lineWidth = 4;
+          ctx.beginPath(); ctx.arc(cc.x, cc.y, Rb + 6, -Math.PI / 2, -Math.PI / 2 + TAU * f); ctx.stroke();
+          ctx.fillStyle = '#ffffff'; ctx.font = 'bold 14px ' + R.FONT;
+          ctx.fillText(String(Math.ceil(cc.revive)), cc.x, cc.y + 10);
+        } else if (vul) {
+          ctx.fillStyle = '#ffe27a'; ctx.font = 'bold 12px ' + R.FONT;
+          ctx.fillText('HIT ME!', cc.x, cc.y - p.ringRadius - 18);
+        } else {
+          ctx.fillStyle = 'rgba(200,210,235,0.8)'; ctx.font = 'bold 11px ' + R.FONT;
+          ctx.fillText('z z', cc.x, cc.y - p.ringRadius - 16 - (g.t * 6 % 6));
+        }
+      }
+      ctx.restore();
+    }
+  });
+
+  // ======================= The Storm Cloud =======================
+  // Drifts across the top raining slow drops; a drop that lands on the paddle shrinks it for a while (the ball
+  // and lasers pop drops). It rumbles and stops still (the tell), lightning strikes the column under it, and
+  // only then, for a few seconds while it is bright and wide-eyed, can it be hurt.
+  register('stormcloud', {
+    boss: true, bossName: 'The Storm Cloud',
+    init: function (g, r) {
+      var s = r.s, p = r.p;
+      s.x = C.W / 2; s.y = p.y || 118; s.y0 = s.y; s.dir = 1; s.t = 0;
+      s.mode = 'rain'; s.timer = p.idle; s.dropT = p.dropEvery; s.flash = 0; s.hitCd = 0; s.bolt = []; s.boltT = 0; s.puff = 0;
+      s.hp = s.maxHp = Math.max(3, Math.round(p.hp * g.preset.bossHpScale)); s.defeated = false;
+      s.drops = [];
+      for (var i = 0; i < 10; i++) s.drops.push({ x: 0, y: 0, alive: false });
+    },
+    update: function (g, r, dt) {
+      var s = r.s, p = r.p, pd = g.paddle, i;
+      s.t += dt;
+      if (s.flash > 0) s.flash -= dt;
+      if (s.hitCd > 0) s.hitCd -= dt;
+      if (s.boltT > 0) s.boltT -= dt;
+      if (s.puff > 0) s.puff -= dt;
+      if (s.defeated) return;
+      var play = g.state === 'play';
+      if (s.mode !== 'charge') { // drift (stops still while charging, so the strike column is easy to read)
+        s.x += s.dir * p.drift * (0.6 + 0.4 * g.preset.hazardScale) * dt * (play ? 1 : 0.4);
+        if (s.x < 80) { s.x = 80; s.dir = 1; } else if (s.x > C.W - 80) { s.x = C.W - 80; s.dir = -1; }
+      }
+      s.y = s.y0 + Math.sin(s.t * 0.9) * 8;
+      if (play) {
+        s.timer -= dt;
+        if (s.timer <= 0) {
+          if (s.mode === 'rain') { s.mode = 'charge'; s.timer = g.presetName === 'easy' ? p.charge * 1.4 : p.charge; g.fx.sound('rumble'); }
+          else if (s.mode === 'charge') { this.strike(g, r); s.mode = 'open'; s.timer = p.open * (g.presetName === 'easy' ? 1.3 : 1); }
+          else { s.mode = 'rain'; s.timer = p.idle * (0.8 + 0.4 * g.rng()); }
+        }
+        if (s.mode === 'rain') {
+          s.dropT -= dt * g.preset.hazardScale;
+          if (s.dropT <= 0) {
+            s.dropT = p.dropEvery;
+            for (i = 0; i < s.drops.length; i++) if (!s.drops[i].alive) {
+              var q = s.drops[i];
+              q.alive = true; q.x = s.x + (g.rng() * 2 - 1) * p.bodyRadius * 1.3; q.y = s.y + p.bodyRadius * 0.6;
+              break;
+            }
+          }
+        }
+      } else if (s.mode !== 'rain') { s.mode = 'rain'; s.timer = p.idle; }
+      for (i = 0; i < s.drops.length; i++) {
+        var d = s.drops[i];
+        if (!d.alive) continue;
+        d.y += p.dropSpeed * dt;
+        if (d.y > C.H + 10) { d.alive = false; continue; }
+        if (!pd.off && Math.abs(d.x - pd.x) < pd.w / 2 + 4 && Math.abs(d.y - pd.y) < pd.h / 2 + 5) {
+          d.alive = false;
+          g.eff.long = 0;
+          g.eff.shrink = Math.max(g.eff.shrink, g.presetName === 'easy' ? p.shrinkTimeEasy : p.shrinkTime);
+          g.fx.sound('drip');
+          g.fx.text(pd.x, pd.y - 22, 'Drip! Shrink!', '#9fe3ff');
+          g.fx.burst(d.x, d.y, '#9fe3ff', 8, 'spark');
+        }
+      }
+    },
+    strike: function (g, r) {
+      var s = r.s, p = r.p, pd = g.paddle, half = p.boltWidth / 2, x = s.x;
+      s.boltX = x; s.boltT = 0.3; s.flash = 0.2;
+      s.bolt.length = 0;
+      for (var y = s.y + p.bodyRadius * 0.5; y < pd.y + 10; y += 22) s.bolt.push(x + (g.rng() * 2 - 1) * half * 0.6, y);
+      g.fx.sound('thunder');
+      g.fx.shake(4); g.shakeAmt = Math.max(g.shakeAmt, 4);
+      for (var i = 0; i < g.bricks.length; i++) {
+        var b = g.bricks[i];
+        if (b.alive && b.y > s.y && b.x < x + half && b.x + b.w > x - half) g.hitBrick(b, null, 'lightning');
+      }
+      if (!pd.off && pd.x + pd.w / 2 > x - half && pd.x - pd.w / 2 < x + half) {
+        pd.frozen = Math.max(pd.frozen, g.presetName === 'easy' ? p.freezeEasy : p.freeze);
+        g.fx.sound('zap'); g.fx.text(pd.x, pd.y - 26, 'Zapped!', '#ffe27a');
+      }
+      g.fx.text(s.x, s.y + p.bodyRadius + 26, 'Now! Hit it!', '#ffe27a');
+    },
+    onBallStep: function (g, r, ball) {
+      var s = r.s, p = r.p, i;
+      if (s.defeated) return;
+      // body: three overlapping puffs
+      for (i = -1; i <= 1; i++) {
+        var px = s.x + i * p.bodyRadius * 0.75, rad = i ? p.bodyRadius * 0.7 : p.bodyRadius;
+        if (P.circleCircle(ball.x, ball.y, ball.r, px, s.y, rad) > 0) {
+          ball.x += HIT.nx * HIT.depth; ball.y += HIT.ny * HIT.depth;
+          P.reflect(ball, HIT.nx, HIT.ny);
+          this.hit(g, r);
+          break;
+        }
+      }
+      for (i = 0; i < s.drops.length; i++) { // the ball pops drops
+        var d = s.drops[i];
+        if (d.alive && Math.abs(ball.x - d.x) < 5 + ball.r && Math.abs(ball.y - d.y) < 7 + ball.r) {
+          d.alive = false; g.score += 10; g.fx.burst(d.x, d.y, '#9fe3ff', 6, 'spark'); g.fx.sound('drip');
+        }
+      }
+    },
+    onLaser: function (g, r, L) {
+      var s = r.s, p = r.p;
+      if (s.defeated) return false;
+      for (var i = 0; i < s.drops.length; i++) {
+        var d = s.drops[i];
+        if (d.alive && Math.abs(L.x - d.x) < 7 && Math.abs(L.y - d.y) < 10) { d.alive = false; g.fx.burst(d.x, d.y, '#9fe3ff', 6, 'spark'); return true; }
+      }
+      if (Math.abs(L.x - s.x) < p.bodyRadius * 1.4 && Math.abs(L.y - s.y) < p.bodyRadius * 0.8) { this.hit(g, r); return true; }
+      return false;
+    },
+    hit: function (g, r) {
+      var s = r.s;
+      if (s.hitCd > 0) return;
+      s.hitCd = 0.3;
+      if (s.mode !== 'open') {
+        s.puff = 0.2; g.fx.sound('puff');
+        return;
+      }
+      s.hp--; s.flash = 0.2;
+      g.sinceHit = 0; g.score += C.score.bossHit;
+      g.fx.sound('bosshit'); g.fx.shake(3); g.shakeAmt = Math.max(g.shakeAmt, 3);
+      g.fx.burst(s.x, s.y, '#fff2b0', 12, 'spark');
+      if (s.hp <= 0) {
+        bossDefeated(g, r, s.x, s.y);
+        for (var i = 0; i < s.drops.length; i++) s.drops[i].alive = false;
+        shatterOwned(g, r);
+      }
+    },
+    render: function (ctx, g, r, layer, R) {
+      var s = r.s, p = r.p, i;
+      if (s.defeated) return;
+      ctx.save();
+      if (layer === 'back') {
+        if (s.mode === 'charge') { // the column the lightning will hit
+          var k = 1 - s.timer / p.charge, a = 0.06 + 0.14 * Math.max(0, k) + (Math.sin(s.t * 30) > 0 ? 0.05 : 0);
+          ctx.fillStyle = 'rgba(255,240,150,' + a.toFixed(3) + ')';
+          ctx.fillRect(s.x - p.boltWidth / 2, s.y, p.boltWidth, g.paddle.y - s.y);
+        }
+        ctx.restore(); return;
+      }
+      // rain drops
+      ctx.fillStyle = '#9fe3ff';
+      for (i = 0; i < s.drops.length; i++) {
+        var d = s.drops[i];
+        if (!d.alive) continue;
+        ctx.beginPath(); ctx.moveTo(d.x, d.y - 8); ctx.quadraticCurveTo(d.x + 5, d.y + 1, d.x, d.y + 5); ctx.quadraticCurveTo(d.x - 5, d.y + 1, d.x, d.y - 8); ctx.fill();
+      }
+      // body
+      var open = s.mode === 'open', charge = s.mode === 'charge';
+      var col = s.flash > 0 ? '#ffffff' : (open ? '#fff6c8' : (charge ? (Math.sin(s.t * 25) > 0 ? '#5a5f78' : '#7b8099') : '#8d93ab'));
+      var Rb = p.bodyRadius, sc = s.puff > 0 ? 1.06 : 1;
+      ctx.beginPath(); // three puffs, each its own sub-path
+      ctx.moveTo(s.x - Rb * 0.75 + Rb * 0.7 * sc, s.y + 4); ctx.arc(s.x - Rb * 0.75, s.y + 4, Rb * 0.7 * sc, 0, TAU);
+      ctx.moveTo(s.x + Rb * 0.75 + Rb * 0.7 * sc, s.y + 4); ctx.arc(s.x + Rb * 0.75, s.y + 4, Rb * 0.7 * sc, 0, TAU);
+      ctx.moveTo(s.x + Rb * sc, s.y - 4); ctx.arc(s.x, s.y - 4, Rb * sc, 0, TAU);
+      if (open) { // glowing outline round the whole cloud: stroke wide first, the fill covers the inner seams
+        ctx.strokeStyle = 'rgba(255,220,90,' + (0.6 + 0.4 * Math.sin(s.t * 14)).toFixed(3) + ')'; ctx.lineWidth = 7; ctx.stroke();
+      }
+      ctx.fillStyle = col; ctx.fill();
+      // face: wide eyes while it can be hurt, angry slits otherwise
+      ctx.fillStyle = '#20243a'; ctx.strokeStyle = '#20243a'; ctx.lineWidth = 2.5;
+      for (var e = -1; e <= 1; e += 2) {
+        var ex = s.x + e * 10, ey = s.y - 2;
+        if (open) { ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(ex, ey, 5, 0, TAU); ctx.fill(); ctx.fillStyle = '#20243a'; ctx.beginPath(); ctx.arc(ex, ey + 1, 2.4, 0, TAU); ctx.fill(); }
+        else { ctx.beginPath(); ctx.moveTo(ex - 5, ey - 2 - e * -2); ctx.lineTo(ex + 5, ey - 2 + e * -2); ctx.stroke(); }
+      }
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      if (open) { ctx.fillStyle = '#ffe27a'; ctx.font = 'bold 13px ' + R.FONT; ctx.fillText('HIT ME!', s.x, s.y - Rb - 12); }
+      // hp pips
+      ctx.fillStyle = '#ffe27a';
+      for (i = 0; i < s.hp; i++) { ctx.beginPath(); ctx.arc(s.x - (s.hp - 1) * 3.5 + i * 7, s.y + Rb * 0.7 + 8, 2, 0, TAU); ctx.fill(); }
+      if (s.boltT > 0 && s.bolt.length) {
+        var al = Math.min(1, s.boltT / 0.2);
+        ctx.strokeStyle = 'rgba(255,250,200,' + al.toFixed(3) + ')'; ctx.lineWidth = 4; ctx.lineJoin = 'round';
+        ctx.beginPath(); ctx.moveTo(s.bolt[0], s.bolt[1]);
+        for (i = 2; i < s.bolt.length; i += 2) ctx.lineTo(s.bolt[i], s.bolt[i + 1]);
+        ctx.stroke();
+      }
+      if (g.paddle.frozen > 0) {
+        var pd = g.paddle;
+        ctx.strokeStyle = 'rgba(255,240,120,0.95)'; ctx.lineWidth = 1.5; ctx.beginPath();
+        for (i = 0; i <= 8; i++) { var zx = pd.x - pd.w / 2 + pd.w * i / 8, zy = pd.y + ((i + (s.t * 20 | 0)) % 2 ? -4 : 4); if (i === 0) ctx.moveTo(zx, zy); else ctx.lineTo(zx, zy); }
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+  });
+
+  // ======================= The Machine (final boss) =======================
+  // A machine with a glowing core under its face plate. Three phases, each borrowing a rule from an earlier
+  // world: conveyor belts of armour (World 2), a red/blue shield with switches (World 4), then a thunderstorm
+  // while the machine sways (World 7). The borrowed rule is really added with g.addRule for the phase and
+  // taken out after it. Between phases the shutters close (no damage), the old parts break off and the next
+  // ones fade in as ghosts that only turn solid where no ball is touching them.
+  var MACHINE_PHASES = [
+    { title: 'PHASE 1: ON THE MOVE', sub: 'Shoot through the gaps in the belts', rule: { id: 'conveyor', rows: { 7: 46, 8: -60, 9: 34 } },
+      rows: { 7: '.22..22..22.', 8: '2..2c..c2..2', 9: '.cc..22..cc.' } },
+    { title: 'PHASE 2: SWITCHES', sub: 'Hit a switch to swap the solid colour', rule: { id: 'redblue', start: 'red', legendX: 70, legendY: 106 },
+      rows: { 7: '..RRRRRRRR..', 8: '..BBBBBBBB..', 11: 'S..........S' } },
+    { title: 'PHASE 3: THE STORM', sub: 'Dodge the lightning!', rule: { id: 'thunder', first: 2.5, calmMin: 3.4, calmMax: 5, aimAtPaddle: 0.4 },
+      rows: { 8: '.2..2..2..2.', 9: '2..c..c..c.2' } }
+  ];
+  register('machine', {
+    boss: true, bossName: 'The Machine',
+    init: function (g, r) {
+      var s = r.s, p = r.p;
+      s.hps = [];
+      for (var i = 0; i < 3; i++) s.hps.push(Math.max(2, Math.round(p.hp[i] * g.preset.bossHpScale)));
+      s.maxHp = s.hps[0] + s.hps[1] + s.hps[2]; s.hp = s.maxHp;
+      s.phase = 0; s.phaseHp = s.hps[0]; s.trans = 0; s.t = 0; s.flash = 0; s.hitCd = 0; s.clang = 0; s.off = 0;
+      s.cx = C.W / 2; s.defeated = false; s.parts = []; s.sub = null; s.title = 0;
+      this.body(r);
+      this.buildPhase(g, r, 0, true);
+    },
+    body: function (r) { // face plate rect and core circle (world coordinates)
+      var s = r.s;
+      s.bx = s.cx + s.off - 120; s.by = 62; s.bw = 240; s.bh = 54;
+      s.coreX = s.cx + s.off; s.coreY = s.by + s.bh + 6;
+    },
+    buildPhase: function (g, r, n, first) {
+      var s = r.s, ph = MACHINE_PHASES[n], gr = C.grid;
+      s.parts.length = 0;
+      for (var key in ph.rows) {
+        var row = +key, line = ph.rows[key];
+        for (var col = 0; col < line.length; col++) {
+          var b = BT.Bricks.fromChar(line[col], col * gr.cellW + 1, gr.top + row * gr.cellH + 1, gr.brickW, gr.brickH);
+          if (!b) continue;
+          b.row = row; b.col = col; b.grid = true; b.required = false; b.owner = r; b.machinePart = true;
+          b.x = b.bx; b.y = b.by;
+          if (!first) { g.makeGhostable(b); b.solid = false; b.ghost = 1; b.assembling = true; }
+          g.addBrick(b); s.parts.push(b);
+        }
+      }
+      s.sub = g.addRule(ph.rule);
+      s.title = first ? 0 : 1.1;
+    },
+    endPhase: function (g, r) {
+      var s = r.s;
+      for (var i = 0; i < s.parts.length; i++) if (s.parts[i].alive) g.destroyBrick(s.parts[i], 'boss');
+      s.parts.length = 0;
+      if (s.sub) { g.removeRule(s.sub); s.sub = null; }
+      g.paddle.frozen = 0;
+    },
+    update: function (g, r, dt) {
+      var s = r.s, p = r.p, i;
+      s.t += dt;
+      if (s.flash > 0) s.flash -= dt;
+      if (s.hitCd > 0) s.hitCd -= dt;
+      if (s.clang > 0) s.clang -= dt;
+      if (s.title > 0) s.title -= dt;
+      if (s.defeated) return;
+      if (s.phase === 2) s.off = Math.sin(s.t * TAU / p.swayPeriod) * p.sway * (0.7 + 0.3 * g.preset.hazardScale);
+      else s.off *= Math.max(0, 1 - dt * 2);
+      this.body(r);
+      // parts that faded in: once solid they stop looking switchable (red/blue ones keep their colour rule)
+      for (i = 0; i < s.parts.length; i++) {
+        var b = s.parts[i];
+        if (b.assembling && b.solid && b.ghost < 0.05) { b.assembling = false; b.ghost = 0; if (!b.group) b.ghostable = false; }
+      }
+      if (s.trans > 0) {
+        s.trans -= dt;
+        if (s.trans <= 0) {
+          s.phase++;
+          s.phaseHp = s.hps[s.phase];
+          this.buildPhase(g, r, s.phase, false);
+          g.fx.sound('unlock');
+        }
+      }
+    },
+    vulnerable: function (r) { return !r.s.defeated && r.s.trans <= 0; },
+    onBallStep: function (g, r, ball) {
+      var s = r.s;
+      if (s.defeated) return;
+      if (P.circleRect(ball.x, ball.y, ball.r, s.bx, s.by, s.bw, s.bh) > 0) {
+        ball.x += HIT.nx * HIT.depth; ball.y += HIT.ny * HIT.depth;
+        if (P.reflect(ball, HIT.nx, HIT.ny) && s.clang <= 0) { s.clang = 0.1; g.fx.sound('steel'); }
+      }
+      if (P.circleCircle(ball.x, ball.y, ball.r, s.coreX, s.coreY, r.p.coreRadius) > 0) {
+        ball.x += HIT.nx * HIT.depth; ball.y += HIT.ny * HIT.depth;
+        P.reflect(ball, HIT.nx, HIT.ny);
+        this.hitCore(g, r);
+      }
+    },
+    onLaser: function (g, r, L) {
+      var s = r.s;
+      if (s.defeated) return false;
+      var dx = L.x - s.coreX, dy = L.y - s.coreY;
+      if (dx * dx + dy * dy < r.p.coreRadius * r.p.coreRadius) { this.hitCore(g, r); return true; }
+      if (L.x > s.bx && L.x < s.bx + s.bw && L.y < s.by + s.bh) return true;
+      return false;
+    },
+    hitCore: function (g, r) {
+      var s = r.s;
+      if (s.hitCd > 0) return;
+      s.hitCd = 0.35;
+      if (!this.vulnerable(r)) { g.fx.sound('steel'); return; }
+      s.phaseHp--; s.hp--; s.flash = 0.25;
+      g.sinceHit = 0; g.score += C.score.bossHit;
+      g.fx.sound('bosshit'); g.fx.shake(3); g.shakeAmt = Math.max(g.shakeAmt, 3);
+      g.fx.burst(s.coreX, s.coreY, '#ff5a64', 14, 'spark');
+      if (s.phaseHp > 0) return;
+      if (s.phase >= 2) {
+        this.endPhase(g, r);
+        bossDefeated(g, r, s.coreX, s.coreY);
+        shatterOwned(g, r);
+        return;
+      }
+      this.endPhase(g, r);
+      s.trans = r.p.transition;
+      g.score += 300;
+      g.fx.sound('bossdown');
+      g.fx.ring(s.coreX, s.coreY, 160, '#ffb347');
+      g.fx.shake(C.shake.boss); g.shakeAmt = Math.max(g.shakeAmt, C.shake.boss);
+    },
+    render: function (ctx, g, r, layer, R) {
+      var s = r.s, p = r.p, i;
+      if (s.defeated) return;
+      if (layer === 'back') return;
+      ctx.save();
+      // face plate
+      R.roundRect(ctx, s.bx, s.by, s.bw, s.bh, 10);
+      var grd = ctx.createLinearGradient(0, s.by, 0, s.by + s.bh);
+      grd.addColorStop(0, '#6d7891'); grd.addColorStop(1, '#2c3242');
+      ctx.fillStyle = grd; ctx.fill();
+      ctx.strokeStyle = '#a9b4cc'; ctx.lineWidth = 2; ctx.stroke();
+      ctx.fillStyle = '#c8d0e0';
+      for (i = 0; i < 2; i++) for (var j = 0; j < 2; j++) { ctx.beginPath(); ctx.arc(s.bx + 10 + i * (s.bw - 20), s.by + 10 + j * (s.bh - 20), 2.5, 0, TAU); ctx.fill(); }
+      // phase lights: one lamp per phase, lit for the phases still to beat
+      for (i = 0; i < 3; i++) {
+        var lx = s.coreX - 24 + i * 24, ly = s.by + 14, done = i < s.phase || (i === s.phase && s.trans > 0);
+        ctx.fillStyle = done ? '#2a2f3d' : (i === s.phase ? '#ff5a64' : '#ffb347');
+        ctx.beginPath(); ctx.arc(lx, ly, 5, 0, TAU); ctx.fill();
+        ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 1; ctx.stroke();
+      }
+      // gear teeth along the bottom edge, turning
+      ctx.fillStyle = '#4a5368';
+      for (i = 0; i < 10; i++) { var gx = s.bx + 12 + ((i * 24 + s.t * 20) % (s.bw - 24)); ctx.fillRect(gx, s.by + s.bh - 4, 8, 6); }
+      // core: an eye with an iris when it can be hit, shutters closed between phases
+      var vul = this.vulnerable(r), cr = p.coreRadius;
+      ctx.fillStyle = '#1a1d28'; ctx.beginPath(); ctx.arc(s.coreX, s.coreY, cr + 4, 0, TAU); ctx.fill();
+      if (vul) {
+        var pu = 0.5 + 0.5 * Math.sin(g.t * 6);
+        var cg = ctx.createRadialGradient(s.coreX, s.coreY, 2, s.coreX, s.coreY, cr);
+        cg.addColorStop(0, '#ffffff'); cg.addColorStop(0.4, s.flash > 0 ? '#ffffff' : '#ff8a94'); cg.addColorStop(1, '#c0182b');
+        ctx.fillStyle = cg; ctx.beginPath(); ctx.arc(s.coreX, s.coreY, cr, 0, TAU); ctx.fill();
+        var tx = g.balls.length ? g.balls[0].x : g.paddle.x, ty = g.balls.length ? g.balls[0].y : g.paddle.y;
+        var dx = tx - s.coreX, dy = ty - s.coreY, dd = Math.sqrt(dx * dx + dy * dy) || 1;
+        ctx.fillStyle = '#2a0008'; ctx.beginPath(); ctx.arc(s.coreX + dx / dd * 6, s.coreY + dy / dd * 6, 5, 0, TAU); ctx.fill();
+        ctx.strokeStyle = 'rgba(255,230,120,' + (0.5 + 0.5 * pu).toFixed(3) + ')'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(s.coreX, s.coreY, cr + 4, 0, TAU); ctx.stroke();
+        ctx.fillStyle = '#ffe27a';
+        for (i = 0; i < s.phaseHp; i++) { ctx.beginPath(); ctx.arc(s.coreX - (s.phaseHp - 1) * 3.5 + i * 7, s.coreY + cr + 10, 2, 0, TAU); ctx.fill(); }
+      } else { // shutters
+        ctx.fillStyle = '#596277';
+        ctx.beginPath(); ctx.arc(s.coreX, s.coreY, cr, 0, TAU); ctx.fill();
+        ctx.strokeStyle = '#2a2f3d'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(s.coreX - cr, s.coreY); ctx.lineTo(s.coreX + cr, s.coreY); ctx.moveTo(s.coreX, s.coreY - cr); ctx.lineTo(s.coreX, s.coreY + cr); ctx.stroke();
+      }
+      // phase title card during the change-over (and for a moment after)
+      var show = s.trans > 0 ? MACHINE_PHASES[s.phase + 1] : (s.title > 0 ? MACHINE_PHASES[s.phase] : null);
+      if (show) {
+        var a = s.trans > 0 ? Math.min(1, (p.transition - s.trans) * 3) : Math.min(1, s.title * 1.5);
+        ctx.globalAlpha = a;
+        R.roundRect(ctx, 30, 300, C.W - 60, 64, 14);
+        ctx.fillStyle = 'rgba(10,12,24,0.88)'; ctx.fill();
+        ctx.strokeStyle = '#ffb347'; ctx.lineWidth = 2; ctx.stroke();
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#ffd59a'; ctx.font = '900 18px ' + R.FONT;
+        ctx.fillText(show.title, C.W / 2, 322);
+        ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.font = '13px ' + R.FONT;
+        ctx.fillText(show.sub, C.W / 2, 346);
+        ctx.globalAlpha = 1;
+      }
+      ctx.restore();
+    }
+  });
+  BT.MACHINE_PHASES = MACHINE_PHASES;
+
   var HIT_LINES = ['Ha!', 'Nope!', 'Mine!', 'Too easy!', 'Back you go!'];
   var MISS_LINES = ['Hey!', 'Oops!', 'No fair!', 'Lucky!'];
 })(typeof window !== 'undefined' ? (window.BT = window.BT || {}) : (globalThis.BT = globalThis.BT || {}));

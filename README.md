@@ -1,6 +1,6 @@
 # Brick Twist
 
-A brick-breaker where every level changes a rule. Levels 1-25 (Worlds 1-5).
+A brick-breaker where every level changes a rule. Levels 1-40 (Worlds 1-8).
 
 - Play: open `index.html` (or the GitHub Pages site).
 - Edit: source is in `src/`, tunables are in the `CONFIG` object at the top of `src/config.js`.

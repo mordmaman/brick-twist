@@ -54,43 +54,78 @@
       var pr = C.presets[cur];
       ctx.fillText(pr.blurb + ' · ' + pr.lives + ' lives', C.W / 2, 144);
 
-      // playable worlds (compact rows so five fit on a phone screen)
-      var y = 158;
+      // worlds: a list that scrolls by touch drag or mouse wheel under the fixed header
+      var top = this.LIST_TOP, sc = app.sel.scroll, max = this.maxScroll();
+      this.oy = top - sc;
+      ctx.save();
+      ctx.beginPath(); ctx.rect(0, top, C.W, C.H - top); ctx.clip();
+      var y = 0;
       for (var w = 0; w < BT.WORLDS.length; w++) {
-        var W = BT.WORLDS[w];
-        if (W.soon) continue;
-        ctx.textAlign = 'left'; ctx.fillStyle = W.accent; ctx.font = 'bold 12px ' + R.FONT;
-        ctx.fillText('WORLD ' + W.n, 20, y + 6);
-        ctx.fillStyle = 'rgba(255,255,255,0.75)'; ctx.font = '12px ' + R.FONT;
-        ctx.fillText(W.name, 86, y + 6);
-        for (i = 0; i < 5; i++) {
-          var id = (W.n - 1) * 5 + i + 1, L = BT.levelById(id);
-          this.tile(ctx, 20 + i * 66, y + 14, L, W, S, t);
+        var W = BT.WORLDS[w], ry = this.oy + y;
+        if (ry > -80 && ry < C.H) {
+          ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillStyle = W.accent; ctx.font = 'bold 12px ' + R.FONT;
+          ctx.fillText('WORLD ' + W.n, 20, ry + 6);
+          ctx.fillStyle = 'rgba(255,255,255,0.75)'; ctx.font = '12px ' + R.FONT;
+          ctx.fillText(W.name, 86, ry + 6);
+          for (i = 0; i < 5; i++) {
+            var id = (W.n - 1) * 5 + i + 1, L = BT.levelById(id);
+            if (L) this.tile(ctx, 20 + i * 66, ry + 14, L, W, S, t);
+          }
         }
-        y += 76;
-      }
-      // worlds 4-6: coming soon
-      for (w = 0; w < BT.WORLDS.length; w++) {
-        W = BT.WORLDS[w];
-        if (!W.soon) continue;
-        R.roundRect(ctx, 20, y, C.W - 40, 30, 8);
-        ctx.fillStyle = 'rgba(255,255,255,0.04)'; ctx.fill();
-        ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.stroke();
-        ctx.textAlign = 'left'; ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.font = 'bold 12px ' + R.FONT;
-        ctx.fillText('WORLD ' + W.n, 32, y + 16);
-        ctx.font = '12px ' + R.FONT; ctx.fillText(W.name, 98, y + 16);
-        ctx.textAlign = 'right'; ctx.fillStyle = 'rgba(255,211,90,0.55)'; ctx.font = 'italic 12px ' + R.FONT;
-        ctx.fillText('coming soon', C.W - 32, y + 16);
-        y += 34;
+        y += this.ROW_H;
       }
       // footer
-      var total = S.totalStars(), max = BT.LEVELS.length * 3;
-      R.drawStar(ctx, C.W / 2 - 40, y + 16, 8, true);
-      ctx.textAlign = 'left'; ctx.fillStyle = '#ffffff'; ctx.font = 'bold 14px ' + R.FONT;
-      ctx.fillText(total + ' / ' + max, C.W / 2 - 26, y + 17);
+      var fy = this.oy + y;
+      var total = S.totalStars(), maxS = BT.LEVELS.length * 3;
+      R.drawStar(ctx, C.W / 2 - 40, fy + 10, 8, true);
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#ffffff'; ctx.font = 'bold 14px ' + R.FONT;
+      ctx.fillText(total + ' / ' + maxS, C.W / 2 - 26, fy + 11);
       ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(255,255,255,0.45)'; ctx.font = '11px ' + R.FONT;
-      ctx.fillText('Drag anywhere to steer · tap to launch · keys: arrows + space', C.W / 2, y + 38);
-      if (!S.ok) { ctx.fillStyle = 'rgba(255,160,120,0.6)'; ctx.fillText('Progress is not being saved on this device', C.W / 2, y + 53); }
+      ctx.fillText('Drag anywhere to steer · tap to launch · keys: arrows + space', C.W / 2, fy + 32);
+      if (!S.ok) { ctx.fillStyle = 'rgba(255,160,120,0.6)'; ctx.fillText('Progress is not being saved on this device', C.W / 2, fy + 47); }
+      ctx.restore();
+      // scroll hints: soft fades at the edges that still have more list, and a thin scroll bar
+      if (max > 0) {
+        var fade;
+        if (sc > 1) {
+          fade = ctx.createLinearGradient(0, top, 0, top + 18);
+          fade.addColorStop(0, 'rgba(5,6,13,0.85)'); fade.addColorStop(1, 'rgba(5,6,13,0)');
+          ctx.fillStyle = fade; ctx.fillRect(0, top, C.W, 18);
+        }
+        if (sc < max - 1) {
+          fade = ctx.createLinearGradient(0, C.H - 26, 0, C.H);
+          fade.addColorStop(0, 'rgba(5,6,13,0)'); fade.addColorStop(1, 'rgba(5,6,13,0.9)');
+          ctx.fillStyle = fade; ctx.fillRect(0, C.H - 26, C.W, 26);
+          var a = 0.35 + 0.25 * Math.sin(t * 3);
+          ctx.fillStyle = 'rgba(255,255,255,' + a.toFixed(3) + ')';
+          ctx.beginPath(); ctx.moveTo(C.W / 2 - 8, C.H - 12); ctx.lineTo(C.W / 2 + 8, C.H - 12); ctx.lineTo(C.W / 2, C.H - 5); ctx.closePath(); ctx.fill();
+        }
+        var trackH = C.H - top - 8, thumbH = Math.max(40, trackH * (C.H - top) / (C.H - top + max));
+        var ty = top + 4 + (trackH - thumbH) * (sc / max);
+        R.roundRect(ctx, C.W - 6, ty, 3, thumbH, 1.5);
+        ctx.fillStyle = 'rgba(255,255,255,0.25)'; ctx.fill();
+      }
+    },
+
+    // list geometry (the header above LIST_TOP stays put)
+    LIST_TOP: 156, ROW_H: 76, FOOTER_H: 62,
+    contentHeight: function () { return BT.WORLDS.length * this.ROW_H + this.FOOTER_H; },
+    maxScroll: function () { return Math.max(0, this.contentHeight() - (C.H - this.LIST_TOP)); },
+    // scroll that shows the row of level id comfortably (used when opening the list)
+    scrollFor: function (id, cur) {
+      var L = BT.levelById(id), w = L ? L.world - 1 : 0;
+      var rowTop = w * this.ROW_H, rowBot = rowTop + this.ROW_H + 8, view = C.H - this.LIST_TOP;
+      var sc = cur;
+      if (rowTop - 6 < sc) sc = rowTop - 6;
+      if (rowBot > sc + view) sc = rowBot - view;
+      return Math.max(0, Math.min(this.maxScroll(), sc));
+    },
+    // where a level's tile currently is on screen (tests use it), or null if it is scrolled out of view
+    tileRect: function (id, scroll) {
+      var L = BT.levelById(id);
+      if (!L) return null;
+      var x = 20 + ((id - 1) % 5) * 66, y = this.LIST_TOP - scroll + (L.world - 1) * this.ROW_H + 14;
+      return { x: x, y: y, w: 56, h: 54, visible: y >= this.LIST_TOP - 10 && y + 54 <= C.H + 10 };
     },
 
     drawLogo: function (ctx, t) {
@@ -142,7 +177,9 @@
       ctx.fillStyle = '#ffffff'; ctx.font = 'bold 19px ' + R.FONT;
       ctx.fillText(String(L.id), x + w / 2, y + (L.boss ? 24 : 21));
       for (var s = 0; s < 3; s++) R.drawStar(ctx, x + 14 + s * 14, y + 42, 5.5, s < info.stars);
-      this.add(x - 2, y - 2, w + 4, h + 4, 'start:' + L.id);
+      // tappable only where it shows inside the list (never through the header)
+      var y0 = Math.max(y - 2, this.LIST_TOP), y1 = Math.min(y + h + 2, C.H);
+      if (y1 - y0 > 20) this.add(x - 2, y0, w + 4, y1 - y0, 'start:' + L.id);
     },
 
     // ---------------- overlays ----------------
@@ -217,6 +254,54 @@
       }
       this.button(ctx, 60, 400, (C.W - 132) / 2, 46, 'Replay', 'restart');
       this.button(ctx, 72 + (C.W - 132) / 2, 400, (C.W - 132) / 2, 46, 'Levels', 'levels');
+    },
+
+    // ---------------- ending (after the final boss) ----------------
+    drawEnding: function (ctx, app, t) {
+      var R = BT.Render.R, S = BT.Save, res = app.game.result, i;
+      this.dim(ctx, 0.72);
+      // a gentle shower of bricks in every world's colour
+      var cols = ['#ff5a64', '#ff9f43', '#ffd35a', '#2ee0a4', '#4fd8ff', '#5b8cff', '#a46bff', '#ff6bcb'];
+      for (i = 0; i < 26; i++) {
+        var sp = 40 + (i * 37) % 60, x = (i * 97.3 + Math.sin(t + i) * 12) % C.W, y = ((t * sp + i * 71) % (C.H + 40)) - 20;
+        ctx.save(); ctx.translate(x, y); ctx.rotate(Math.sin(t * 1.5 + i) * 0.6);
+        ctx.globalAlpha = 0.55; R.roundRect(ctx, -9, -4, 18, 8, 2); ctx.fillStyle = cols[i % cols.length]; ctx.fill();
+        ctx.restore();
+      }
+      ctx.globalAlpha = 1;
+      this.card(ctx, 86, 468);
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#ffd35a'; ctx.font = 'bold 13px ' + R.FONT;
+      ctx.fillText('THE MACHINE IS BEATEN', C.W / 2, 116);
+      ctx.fillStyle = '#ffffff'; ctx.font = '900 30px ' + R.FONT;
+      ctx.fillText('You did it!', C.W / 2, 150);
+      ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.font = '15px ' + R.FONT;
+      R.wrapText(ctx, 'All eight worlds and all ' + BT.LEVELS.length + ' levels of Brick Twist are cleared.', C.W / 2, 184, C.W - 90, 20);
+      // this fight's stars
+      for (i = 0; i < 3; i++) {
+        var appear = Math.max(0, Math.min(1, (t - 0.4 - i * 0.3) / 0.25)), got = i < res.stars;
+        var s2 = got ? (appear < 1 ? 0.4 + appear * 0.9 : 1 + 0.06 * Math.sin(t * 3 + i)) : 1;
+        if (got && appear <= 0) R.drawStar(ctx, C.W / 2 - 50 + i * 50, 244, 18, false);
+        else R.drawStar(ctx, C.W / 2 - 50 + i * 50, 244, 18 * s2, got);
+        if (got && appear > 0 && appear < 1 && !app.starSfx[i]) { app.starSfx[i] = true; BT.Audio.play('break', 4 + i * 4); }
+      }
+      ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.font = '13px ' + R.FONT;
+      ctx.fillText('Final boss ' + res.score + ' points  ·  ' + fmt(res.time), C.W / 2, 274);
+      // all stars so far
+      var total = S.totalStars(), max = BT.LEVELS.length * 3, three = 0;
+      for (i = 0; i < BT.LEVELS.length; i++) if (S.levelInfo(BT.LEVELS[i].id).stars >= 3) three++;
+      R.roundRect(ctx, 48, 296, C.W - 96, 62, 12); ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fill();
+      R.drawStar(ctx, C.W / 2 - 52, 318, 11, true);
+      ctx.textAlign = 'left'; ctx.fillStyle = '#ffffff'; ctx.font = 'bold 20px ' + R.FONT;
+      ctx.fillText(total + ' / ' + max + ' stars', C.W / 2 - 34, 319);
+      ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(255,255,255,0.65)'; ctx.font = '12px ' + R.FONT;
+      ctx.fillText(three + ' of ' + BT.LEVELS.length + ' levels have all 3 stars', C.W / 2, 344);
+      ctx.fillStyle = three < BT.LEVELS.length ? '#9dffb0' : '#ffd35a'; ctx.font = '14px ' + R.FONT;
+      R.wrapText(ctx, three < BT.LEVELS.length
+        ? 'Can you get 3 stars everywhere? Go back and clear levels without losing a ball, inside the par time.'
+        : 'Every level has 3 stars. That is perfect!', C.W / 2, 382, C.W - 96, 19);
+      this.button(ctx, 60, 446, C.W - 120, 48, 'Back to levels', 'levels', true);
+      this.button(ctx, 60, 502, C.W - 120, 40, 'Fight it again', 'restart');
     },
 
     drawLost: function (ctx, app) {

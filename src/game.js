@@ -62,7 +62,10 @@
     this.paddle = {
       x: C.W / 2, y: C.paddle.y, w: pw, h: C.paddle.h, targetX: C.W / 2,
       prevX: C.W / 2, vx: 0, kv: 0, squash: 0, hitFlash: 0,
-      off: false              // a rule can switch the paddle off (the ball falls straight through)
+      off: false,             // a rule can switch the paddle off (the ball falls straight through)
+      frozen: 0,              // seconds the paddle cannot move (the finger can still aim: it catches up after)
+      speedCap: 0,            // px/s cap on paddle movement this step (0 = CONFIG.paddle.maxSpeed)
+      iv: 0                   // ice velocity (only used while g.paddleIce is set)
     };
 
     // Engine extension points that rules switch on in init (all off by default):
@@ -71,6 +74,7 @@
     this.topOpen = false;     // no top wall: a ball that leaves through the top is lost
     this.ghosting = false;    // some bricks can turn non-solid (see makeGhostable / resolveSolidity)
     this.attempts = 0;        // retries of this level without a restart (see retry)
+    this.resetExtensions();
 
     this.buildGrid(level.grid || []);
     this.rules = [];
@@ -123,12 +127,24 @@
     }
   };
 
+  // Phase-3 extension points, all off by default (see the notes at the end of this file).
+  G.resetExtensions = function () {
+    this.wallL = 0;           // side walls: the playfield is wallL..wallR (a rule may move them inward)
+    this.wallR = C.W;
+    this.paddleIce = null;    // { follow, grip, bounce }: paddle slides with momentum instead of following directly
+    this.deflectors = [];     // angled panels the ball bounces off, see addDeflector
+  };
+
   G.newBall = function (x, y, vx, vy) {
     var n = C.ball.trailLength;
     var ball = {
       x: x, y: y, vx: vx || 0, vy: vy || 0, r: C.ball.radius, prevX: x, prevY: y,
       stuck: false, stuckOffset: 0, stuckTimer: 0, boost: 1, dead: false,
-      portalLock: -1, trail: new Float32Array(n * 2), trailN: 0, trailI: 0, id: 0
+      portalLock: -1, trail: new Float32Array(n * 2), trailN: 0, trailI: 0, id: 0,
+      pierce: 0,              // bricks it may still burn straight through without bouncing
+      sizeMul: 1,             // speed factor for this kind of ball (rules set it: e.g. a big slow ball)
+      zoneMul: 1,             // speed factor from where the ball is (rules set it: e.g. under water)
+      kind: null, deflectChain: 0
     };
     this.balls.push(ball);
     return ball;
@@ -139,6 +155,10 @@
     var p = this.paddle;
     var b = this.newBall(p.x, p.y - p.h / 2 - C.ball.radius, 0, 0);
     b.stuck = true; b.stuckOffset = 0; b.serve = true;
+    for (var i = 0; i < this.rules.length; i++) { // e.g. serve a big ball
+      var r = this.rules[i];
+      if (r.mod.onServeBall) r.mod.onServeBall(this, r, b);
+    }
     return b;
   };
 
@@ -151,7 +171,7 @@
   };
 
   G.normalizeBall = function (ball) {
-    var s = Math.min(this.speed() * ball.boost, C.ball.absMaxSpeed);
+    var s = Math.min(this.speed() * ball.boost * ball.sizeMul * ball.zoneMul, C.ball.absMaxSpeed);
     P.normalizeVel(ball, s, C.ball.minVyFrac);
   };
 
@@ -169,7 +189,7 @@
   G.clampTarget = function () {
     if (this.wrapX) return;
     var hw = this.paddle.w / 2 + C.paddle.edgeMargin;
-    this.paddle.targetX = P.clamp(this.paddle.targetX, hw, C.W - hw);
+    this.paddle.targetX = P.clamp(this.paddle.targetX, this.wallL + hw, this.wallR - hw);
   };
 
   // Tap / click / Space: launch, release a caught ball, fire lasers.
@@ -197,7 +217,7 @@
     } else {
       a = P.paddleAngle(b.x, p.x, p.w / 2, p.vx, C.ball);
     }
-    var s = this.speed();
+    var s = this.speed() * b.sizeMul * b.zoneMul;
     b.vx = Math.sin(a) * s; b.vy = -Math.cos(a) * s;
     b.stuck = false; b.serve = false;
     this.fx.sound('launch');
@@ -296,9 +316,14 @@
     }
     this.clampTarget();
     p.prevX = p.x;
-    var dx = p.targetX - p.x, maxStep = cp.maxSpeed * dt;
+    var cap = p.speedCap || cp.maxSpeed;
+    var dx = p.targetX - p.x, maxStep = cap * dt;
     var inst;
-    if (this.wrapX) { // no walls: move freely, then wrap position and target together
+    if (p.frozen > 0) { // frozen in place; the target keeps following the finger
+      p.frozen -= dt; if (p.frozen < 0) p.frozen = 0;
+      p.iv = 0; inst = 0;
+    } else if (this.paddleIce) inst = this.slidePaddle(dt, dx, kd, cap);
+    else if (this.wrapX) { // no walls: move freely, then wrap position and target together
       var mv = P.clamp(dx, -maxStep, maxStep);
       p.x += mv;
       if (p.x >= C.W) { p.x -= C.W; p.targetX -= C.W; } else if (p.x < 0) { p.x += C.W; p.targetX += C.W; }
@@ -306,12 +331,32 @@
     } else {
       p.x += P.clamp(dx, -maxStep, maxStep);
       var hw = p.w / 2;
-      p.x = P.clamp(p.x, hw, C.W - hw);
+      p.x = P.clamp(p.x, this.wallL + hw, this.wallR - hw);
       inst = (p.x - p.prevX) / dt;
     }
     p.vx += (inst - p.vx) * 0.5;
     if (p.squash > 0) p.squash -= dt;
     if (p.hitFlash > 0) p.hitFlash -= dt;
+  };
+
+  // Ice: the paddle has momentum. It accelerates towards the finger and takes a moment to stop, so it
+  // overshoots a little and slides back. follow: how hard it chases (1/s), grip: how quickly its speed
+  // changes (1/s; lower = more slippery), bounce: how much speed it keeps when it hits a wall.
+  G.slidePaddle = function (dt, dx, kd, cap) {
+    var p = this.paddle, ice = this.paddleIce;
+    var want = kd !== 0 ? p.kv : P.clamp(dx * ice.follow, -cap, cap);
+    p.iv += (want - p.iv) * Math.min(1, ice.grip * dt);
+    p.iv = P.clamp(p.iv, -cap, cap);
+    var mv = p.iv * dt;
+    p.x += mv;
+    if (this.wrapX) {
+      if (p.x >= C.W) { p.x -= C.W; p.targetX -= C.W; } else if (p.x < 0) { p.x += C.W; p.targetX += C.W; }
+      return mv / dt;
+    }
+    var hw = p.w / 2, lo = this.wallL + hw, hi = this.wallR - hw;
+    if (p.x < lo) { p.x = lo; if (p.iv < 0) p.iv = -p.iv * ice.bounce; }
+    else if (p.x > hi) { p.x = hi; if (p.iv > 0) p.iv = -p.iv * ice.bounce; }
+    return (p.x - p.prevX) / dt;
   };
 
   // ---------- balls ----------
@@ -321,7 +366,7 @@
       var b = balls[i];
       if (b.dead) continue;
       if (b.stuck) {
-        b.x = this.wrapX ? this.wrapPos(p.x + b.stuckOffset) : P.clamp(p.x + b.stuckOffset, b.r, C.W - b.r);
+        b.x = this.wrapX ? this.wrapPos(p.x + b.stuckOffset) : P.clamp(p.x + b.stuckOffset, this.wallL + b.r, this.wallR - b.r);
         b.y = p.y - p.h / 2 - b.r;
         b.prevX = b.x; b.prevY = b.y;
         if (!b.serve) {
@@ -361,8 +406,8 @@
   G.keepInside = function (b) {
     if (this.wrapX) b.x = this.wrapPos(b.x);
     else {
-      if (b.x < b.r) { b.x = b.r; if (b.vx < 0) b.vx = -b.vx; }
-      if (b.x > C.W - b.r) { b.x = C.W - b.r; if (b.vx > 0) b.vx = -b.vx; }
+      if (b.x < this.wallL + b.r) { b.x = this.wallL + b.r; if (b.vx < 0) b.vx = -b.vx; }
+      if (b.x > this.wallR - b.r) { b.x = this.wallR - b.r; if (b.vx > 0) b.vx = -b.vx; }
     }
     if (b.y < C.TOP + b.r && !this.topOpen) { b.y = C.TOP + b.r; if (b.vy < 0) b.vy = -b.vy; }
     if (!(b.x === b.x) || !(b.y === b.y)) { // NaN guard
@@ -385,8 +430,8 @@
       if (this.wrapX) {
         if (b.x < 0) b.x += C.W; else if (b.x >= C.W) b.x -= C.W;
       }
-      else if (b.x < b.r) { b.x = b.r; if (b.vx < 0) { b.vx = -b.vx; this.fx.sound('wall'); } }
-      else if (b.x > C.W - b.r) { b.x = C.W - b.r; if (b.vx > 0) { b.vx = -b.vx; this.fx.sound('wall'); } }
+      else if (b.x < this.wallL + b.r) { b.x = this.wallL + b.r; if (b.vx < 0) { b.vx = -b.vx; this.fx.sound('wall'); } }
+      else if (b.x > this.wallR - b.r) { b.x = this.wallR - b.r; if (b.vx > 0) { b.vx = -b.vx; this.fx.sound('wall'); } }
       if (this.topOpen) {
         if (b.y + b.r < C.TOP) { b.dead = true; b.exitTop = true; return; }
       }
@@ -414,10 +459,13 @@
         this.combo = 0;
       }
 
+      if (this.deflectors.length) this.deflectorCollide(b);
+
       // bricks (resolve up to two contacts: seams and inside corners)
       for (var pass = 0; pass < 2; pass++) {
         var hitB = this.deepestBrick(b);
         if (!hitB) break;
+        if (b.pierce > 0 && hitB.breakable && !hitB.noPierce && this.pierceBrick(hitB, b)) continue;
         b.x += HIT.nx * HIT.depth; b.y += HIT.ny * HIT.depth;
         var nx = HIT.nx, ny = HIT.ny;
         var reflected = P.reflect(b, nx, ny);
@@ -466,7 +514,7 @@
     if (px === undefined) px = p.x;
     b.y = p.y - p.h / 2 - b.r;
     var a = P.paddleAngle(b.x, px, p.w / 2, p.vx, C.ball);
-    var s = Math.min(this.speed() * b.boost, C.ball.absMaxSpeed);
+    var s = Math.min(this.speed() * b.boost * b.sizeMul * b.zoneMul, C.ball.absMaxSpeed);
     b.vx = Math.sin(a) * s; b.vy = -Math.cos(a) * s;
     p.squash = C.paddle.squashTime;
     p.hitFlash = 0.1;
@@ -525,7 +573,10 @@
     this.sinceHit = 0;
     k.hp--;
     if (k.hp <= 0) this.destroyBrick(k, cause);
-    else {
+    else if (k.type === 'ice') { // a frozen brick thaws on its first hit
+      this.fx.sound('thaw', this.combo);
+      this.fx.burst(k.x + k.w / 2, k.y + k.h / 2, '#e6f7ff', 8, 'chip');
+    } else {
       this.fx.sound('armour', this.combo);
       this.fx.burst(k.x + k.w / 2, k.y + k.h / 2, '#c9d6ee', 4, 'chip');
     }
@@ -647,7 +698,7 @@
       c.t += dt;
       c.y += C.capsule.fallSpeed * dt;
       c.x += (c.vx || 0) * dt;
-      c.x = P.clamp(c.x, cw / 2, C.W - cw / 2);
+      c.x = P.clamp(c.x, this.wallL + cw / 2, this.wallR - cw / 2);
       if (c.y - chh / 2 > C.H) { c.alive = false; continue; }
       var cdx = this.wrapX ? this.wrapDelta(c.x - p.x) : c.x - p.x;
       if (Math.abs(cdx) < (p.w + cw) / 2 && Math.abs(c.y - p.y) < (p.h + chh) / 2) {
@@ -693,6 +744,7 @@
     for (var k = -1; k <= 1; k += 2) {
       if (this.balls.length >= C.ball.maxBalls) break;
       var nb = this.newBall(src.x, src.y, src.vx, src.vy);
+      nb.r = src.r; nb.sizeMul = src.sizeMul; nb.zoneMul = src.zoneMul; nb.kind = src.kind;
       P.rotateVel(nb, k * 25 * P.DEG);
       if (nb.vy > 0 && src.vy < 0) nb.vy = -nb.vy;
       this.normalizeBall(nb);
@@ -863,7 +915,7 @@
     b.y = q.y + q.face * (q.h / 2 + b.r);
     var a = P.paddleAngle(b.x, qx, q.w / 2, q.vx, C.ball) + (q.aim || 0);
     a = P.clamp(a, -C.ball.maxAngleDeg * P.DEG, C.ball.maxAngleDeg * P.DEG);
-    var s = Math.min(this.speed() * b.boost, C.ball.absMaxSpeed);
+    var s = Math.min(this.speed() * b.boost * b.sizeMul * b.zoneMul, C.ball.absMaxSpeed);
     b.vx = Math.sin(a) * s; b.vy = q.face * Math.cos(a) * s;
     q.squash = C.paddle.squashTime; q.hitFlash = 0.1;
     if (q.counts) {
@@ -894,6 +946,8 @@
     for (i = 0; i < this.lasers.length; i++) this.lasers[i].alive = false;
     this.paddle.off = false;
     this.xpaddles.length = 0; this.wrapX = false; this.topOpen = false; this.ghosting = false;
+    this.paddle.frozen = 0; this.paddle.speedCap = 0; this.paddle.iv = 0;
+    this.resetExtensions();
     this.bricks.length = 0;
     this.buildGrid(this.level.grid || []);
     this.rules = []; this.boss = null;
@@ -901,6 +955,69 @@
     for (i = 0; i < rl.length; i++) this.addRule(rl[i]);
     this.finalizeBricks();
     this.newServeBall();
+  };
+
+  // ---------- phase-3 extension points ----------
+  // Burning ball: a ball with b.pierce > 0 goes straight through a breakable brick (destroying it) without
+  // bouncing, using up one pierce. Bricks with noPierce, unbreakable bricks and hits a rule consumes still
+  // bounce it normally, so it can never pass steel or walls.
+  G.pierceBrick = function (k, b) {
+    for (var i = 0; i < 4 && k.alive; i++) {
+      var hp = k.hp;
+      this.hitBrick(k, b, 'pierce');
+      if (k.alive && k.hp === hp) break; // a rule consumed the hit: bounce instead
+    }
+    if (k.alive) return false;
+    b.pierce--;
+    return true;
+  };
+
+  // Deflector panels: straight two-sided panels (x, y = centre, len, ang = angle in radians, thick) that the
+  // ball bounces off like a mirror. The owner rule may define canDeflect(g, r, ball, d) -> false to let a ball
+  // through, and onDeflect(g, r, ball, d, inVx, inVy) to react (it may change the outgoing velocity). Checked every sub-step, so a fast ball cannot skip one.
+  G.addDeflector = function (opts) {
+    var d = { x: 0, y: 0, len: 30, ang: Math.PI / 4, thick: 4, on: true, owner: null };
+    for (var k in opts) d[k] = opts[k];
+    this.deflectors.push(d);
+    return d;
+  };
+  G.deflectorCollide = function (b) {
+    for (var i = 0; i < this.deflectors.length; i++) {
+      var d = this.deflectors[i];
+      if (!d.on) continue;
+      var c = Math.cos(d.ang), s = Math.sin(d.ang);
+      var rx = b.x - d.x, ry = b.y - d.y, half = d.len / 2;
+      var along = P.clamp(rx * c + ry * s, -half, half);
+      var px = rx - along * c, py = ry - along * s;
+      var dist = Math.sqrt(px * px + py * py), lim = b.r + d.thick / 2;
+      if (dist >= lim) continue;
+      var o = d.owner;
+      if (o && o.mod.canDeflect && !o.mod.canDeflect(this, o, b, d)) continue;
+      var nx, ny;
+      if (dist > 1e-6) { nx = px / dist; ny = py / dist; }
+      else { nx = -s; ny = c; if (b.vx * nx + b.vy * ny > 0) { nx = -nx; ny = -ny; } }
+      b.x += nx * (lim - dist); b.y += ny * (lim - dist);
+      var ivx = b.vx, ivy = b.vy;
+      if (P.reflect(b, nx, ny) && o && o.mod.onDeflect) o.mod.onDeflect(this, o, b, d, ivx, ivy);
+    }
+  };
+
+  // True if the rect overlaps any live solid brick other than `except` (rules that move bricks use it so
+  // bricks never overlap each other or steel).
+  G.rectBlocked = function (x, y, w, h, except, margin) {
+    var m = margin || 0, bs = this.bricks;
+    for (var i = 0; i < bs.length; i++) {
+      var k = bs[i];
+      if (k === except || !k.alive || !k.solid) continue;
+      if (k.x < x + w + m && k.x + k.w + m > x && k.y < y + h + m && k.y + k.h + m > y) return true;
+    }
+    return false;
+  };
+
+  // Take a rule out again (a boss that borrows a rule for one phase). Its bricks are left to the caller.
+  G.removeRule = function (inst) {
+    var i = this.rules.indexOf(inst);
+    if (i >= 0) this.rules.splice(i, 1);
   };
 
   // Count of bricks the level needs destroyed (for HUD/tests).

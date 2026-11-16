@@ -10,7 +10,9 @@
     { n: 3, name: 'Bend the ball', tint: '#25163e', accent: '#c56bff' },
     { n: 4, name: 'Lights and switches', tint: '#1a1a1a', accent: '#ffcc33' },
     { n: 5, name: 'Flip the rules', tint: '#2a1414', accent: '#ff6b6b' },
-    { n: 6, name: 'Mash-ups', tint: '#14261a', accent: '#2ee0a4', soon: true }
+    { n: 6, name: 'Mash-ups', tint: '#14261a', accent: '#2ee0a4' },
+    { n: 7, name: 'The elements', tint: '#10223a', accent: '#7fd4ff' },
+    { n: 8, name: 'Wits', tint: '#26182e', accent: '#ff9f43' }
   ];
 
   var LEVELS = [
@@ -409,6 +411,237 @@
         'C..........C'
       ],
       rules: [{ id: 'rival' }]
+    },
+
+    // ---------------- World 6: Mash-ups (two earlier twists that need each other) ----------------
+    {
+      id: 26, world: 6, name: 'Express Delivery', twist: 'mash-conveyor-portals', par: 55,
+      banner: 'Portals are the only way up, and the top ones ride a conveyor belt. Time your shot!',
+      grid: [
+        'rrrr..rrrr..',
+        '..oooo..oooo',
+        'yyCyy..yyCyy',
+        '............',
+        '............',
+        '............',
+        'gg..gggg..gg',
+        '.cccc..cccc.',
+        '............', '............', '............',
+        '############'
+      ],
+      rules: [
+        { id: 'conveyor', rows: { 0: 34, 1: -40, 2: 48, 4: -46, 6: -36, 7: 30 } },
+        { id: 'portals', radius: 19, captureFrac: 0.7,
+          pairs: [
+            [{ x: 52, y: 400 }, { x: 90, y: 136, vx: -46 }],
+            [{ x: 308, y: 400 }, { x: 270, y: 136, vx: -46 }]
+          ] }
+      ]
+    },
+    {
+      id: 27, world: 6, name: 'Night Sky', twist: 'mash-lightsout-orbit', par: 60, clear: 'core', capsuleChance: 0.15,
+      banner: 'Dark, and the rings turn! The glowing bricks ride round with them. Hit the core.',
+      grid: [
+        '............', '............', '............', '............', '............', '............',
+        '............', '............', '............', '............', '............', '............',
+        '............', '............', '............', '............',
+        'G..........G'
+      ],
+      rules: [
+        { id: 'orbit', cx: 180, cy: 226, rings: [
+          { radius: 46, speed: 0.8, pattern: 'cGccccGccc', size: 16 },
+          { radius: 84, speed: -0.5, pattern: 'bb.bGb.bb.bbG.b.bb', size: 16 },
+          { radius: 122, speed: 0.3, pattern: '#...G...#...G...#...', size: 16 }
+        ] },
+        { id: 'lightsout' }
+      ]
+    },
+    {
+      id: 28, world: 6, name: 'Slingshot', twist: 'mash-wrap-wells', par: 120,
+      banner: 'No side walls! The corner bricks join up across the edge, and planets sling the ball over.',
+      grid: [
+        '###......###',
+        '..#......#..',
+        'oo#.pppp.#oo',
+        'rr#.pCpp.#rr',
+        'gg#......#cc',
+        '..#......#..'
+      ],
+      rules: [{ id: 'wrap' }, { id: 'wells', planets: [{ x: 46, y: 330, mass: 0.9 }, { x: 314, y: 270, mass: 0.9 }] }]
+    },
+    {
+      id: 29, world: 6, name: 'Pressure Switch', twist: 'mash-redblue-squeeze', par: 115,
+      banner: 'The wall is coming down! Swap colours with a switch to reach the arrow bricks.',
+      grid: [
+        'BBBBBBBBBBBB',
+        'RRRRRRRRRRRR',
+        '..A....A....',
+        'RRRRBBBBRRRR',
+        '............',
+        'S..........S'
+      ],
+      rules: [{ id: 'redblue', start: 'red', idleSwap: 12 }, { id: 'squeeze', speed: 4 }]
+    },
+    {
+      id: 30, world: 6, name: 'The Twins', twist: 'boss-twins', par: 90, clear: 'boss', boss: true,
+      banner: 'Boss! Only the awake twin can be hurt. Knock one out, then quickly get the other!',
+      grid: [
+        'C..........C'
+      ],
+      rules: [{ id: 'twins' }]
+    },
+
+    // ---------------- World 7: The elements ----------------
+    {
+      id: 31, world: 7, name: 'Ice Rink', twist: 'ice', par: 105,
+      banner: 'Ice! Your paddle slides and takes a moment to stop. Frosty bricks thaw first, then break.',
+      grid: [
+        '............',
+        '..IIIIIIII..',
+        '.Icc.CC.ccI.',
+        '.IIIIIIIIII.',
+        '............',
+        '..bbb..bbb..',
+        '............',
+        '...IIIIII...'
+      ],
+      rules: [{ id: 'ice' }]
+    },
+    {
+      id: 32, world: 7, name: 'High Tide', twist: 'tide', par: 105,
+      banner: 'The tide rises and falls. Under water the ball and your paddle slow down.',
+      grid: [
+        '............',
+        'cccccccccccc',
+        'bbbbCbbbbbbb',
+        'cccccccccccc',
+        '............', '............', '............', '............', '............',
+        '............', '............', '............', '............', '............',
+        '............', '............', '............', '............',
+        'w.w.w..w.w.w',
+        '.gg.gCgg.gg.'
+      ],
+      rules: [{ id: 'tide' }]
+    },
+    {
+      id: 33, world: 7, name: 'Red Hot', twist: 'redhot', par: 125,
+      banner: 'Hit bricks in a row to heat the ball up. Red hot, it burns straight through them!',
+      grid: [
+        '............',
+        '.2222222222.',
+        '.2rrrCrrrr2.',
+        '.2rr####rr2.',
+        '.2rrrrrrCr2.',
+        '.2222..2222.',
+        '............',
+        'oo..oooo..oo',
+        '............',
+        '...yyyyyy...'
+      ],
+      rules: [{ id: 'redhot' }]
+    },
+    {
+      id: 34, world: 7, name: 'Thunderstorm', twist: 'thunder', par: 55,
+      banner: 'Lightning! A cloud shows where it will strike. Keep your paddle out from under it.',
+      grid: [
+        '............',
+        'bbbbbbbbbbbb',
+        '2b22b22b22b2',
+        'bbbbCbbCbbbb',
+        '............',
+        '##..####..##',
+        '............',
+        'pppp....pppp',
+        '............',
+        '..cc....cc..'
+      ],
+      rules: [{ id: 'thunder' }]
+    },
+    {
+      id: 35, world: 7, name: 'The Storm Cloud', twist: 'boss-stormcloud', par: 90, clear: 'boss', boss: true,
+      banner: 'Boss! Its drops shrink your paddle. Hit the cloud right after its lightning flash.',
+      grid: [
+        'C..........C'
+      ],
+      rules: [{ id: 'stormcloud' }]
+    },
+
+    // ---------------- World 8: Wits ----------------
+    {
+      id: 36, world: 8, name: 'Runaways', twist: 'runaway', par: 90,
+      banner: 'These bricks run away from the ball! Trap them against walls and each other.',
+      grid: [
+        '............',
+        '..r.o..y.g..',
+        '............',
+        '.c..##..##.b',
+        '............',
+        '..p.m..r.o..',
+        '............',
+        '#....yy....#',
+        '............',
+        '...g....c...'
+      ],
+      rules: [{ id: 'runaway' }]
+    },
+    {
+      id: 37, world: 8, name: 'Big and Small', twist: 'bigsmall', par: 65, capsuleChance: 0.06,
+      banner: 'A giant ball ploughs through bricks. Hit a purple splitter to break it into small fast ones!',
+      grid: [
+        '222222222222',
+        '2oooooooooo2',
+        '2o22222222o2',
+        '............',
+        '............',
+        '..X......X..',
+        '............',
+        '............',
+        'yyyyyyyyyyyy',
+        'gggCgggggCgg',
+        'cccccccccccc'
+      ],
+      rules: [{ id: 'bigsmall' }]
+    },
+    {
+      id: 38, world: 8, name: 'Closing Walls', twist: 'walls', par: 95,
+      banner: 'The walls are closing in! Hit the orange pushers to shove them back out.',
+      grid: [
+        '....rrrr....',
+        '...oooooo...',
+        '..yyyCyyyy..',
+        '...gggggg...',
+        '....cccc....',
+        '............',
+        '............',
+        '....H..H....',
+        '............',
+        '...bbbbbb...'
+      ],
+      rules: [{ id: 'walls' }]
+    },
+    {
+      id: 39, world: 8, name: 'Hall of Mirrors', twist: 'mirrors', par: 130,
+      banner: 'Mirrors turn the ball sideways and flip when hit. Use them to get into the sealed rooms!',
+      grid: [
+        '............',
+        '###.pppp.###',
+        'rr#.pppp.#oo',
+        'rr........oo',
+        'Cr........oC',
+        'rr........oo',
+        '###......###'
+      ],
+      rules: [{ id: 'mirrors', mirrors: [{ x: 180, y: 136, dir: 1 }, { x: 120, y: 250, dir: 1 }, { x: 240, y: 250, dir: -1 }] }]
+    },
+    {
+      id: 40, world: 8, name: 'The Machine', twist: 'boss-machine', par: 175, clear: 'boss', boss: true, final: true,
+      banner: 'Final boss! The Machine has three phases. Hit its red eye when it is open.',
+      grid: [
+        '............', '............', '............', '............', '............', '............',
+        '............', '............', '............', '............', '............', '............',
+        'C..........C'
+      ],
+      rules: [{ id: 'machine' }]
     }
   ];
 

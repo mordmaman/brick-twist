@@ -253,6 +253,31 @@
           ctx.beginPath(); ctx.moveTo(x + w - 4, y + 2); ctx.lineTo(x + w - 9, cy); ctx.lineTo(x + w - 6, y + h - 2); ctx.stroke();
         }
         break;
+      case 'ice': // frozen: frost facets and a snowflake; once thawed it is a plain brick with drips
+        if (b.hp >= b.maxHp) {
+          ctx.fillStyle = 'rgba(235,250,255,0.72)'; roundRect(ctx, x, y, w, h, 3); ctx.fill();
+          ctx.strokeStyle = 'rgba(120,190,230,0.9)'; ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(x + 3, y + h - 2); ctx.lineTo(x + 9, y + 3); ctx.moveTo(x + w - 4, y + 2); ctx.lineTo(x + w - 9, y + h - 3); ctx.stroke();
+          ctx.strokeStyle = '#3a8cc0'; ctx.lineWidth = 1.3; ctx.beginPath();
+          for (var si = 0; si < 3; si++) { var sa = si * Math.PI / 3; ctx.moveTo(cx - Math.cos(sa) * 4.5, cy - Math.sin(sa) * 4.5); ctx.lineTo(cx + Math.cos(sa) * 4.5, cy + Math.sin(sa) * 4.5); }
+          ctx.stroke();
+        } else {
+          ctx.fillStyle = 'rgba(220,245,255,0.8)';
+          for (var di = 0; di < 3; di++) { var dx2 = x + 6 + di * 8; ctx.beginPath(); ctx.moveTo(dx2 - 2, y + h - 1); ctx.lineTo(dx2 + 2, y + h - 1); ctx.lineTo(dx2, y + h + 2 + (di % 2) * 2); ctx.closePath(); ctx.fill(); }
+        }
+        break;
+      case 'splitter': // a ball breaking into three
+        ctx.fillStyle = '#2a1040';
+        ctx.beginPath(); ctx.arc(cx - 6, cy, 3.4, 0, TAU); ctx.fill();
+        ctx.beginPath(); ctx.arc(cx + 3, cy - 3, 1.8, 0, TAU); ctx.arc(cx + 7, cy + 1, 1.8, 0, TAU); ctx.arc(cx + 3, cy + 4, 1.8, 0, TAU); ctx.fill();
+        ctx.strokeStyle = '#2a1040'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(cx - 2, cy); ctx.lineTo(cx + 0.5, cy); ctx.stroke();
+        break;
+      case 'pusher': // arrows pointing out at both walls
+        ctx.fillStyle = '#4a2600';
+        ctx.beginPath(); ctx.moveTo(x + 3, cy); ctx.lineTo(x + 9, cy - 4.5); ctx.lineTo(x + 9, cy + 4.5); ctx.closePath(); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(x + w - 3, cy); ctx.lineTo(x + w - 9, cy - 4.5); ctx.lineTo(x + w - 9, cy + 4.5); ctx.closePath(); ctx.fill();
+        ctx.fillRect(x + 9, cy - 1, w - 18, 2);
+        break;
       case 'core':
         var pu = 0.5 + 0.5 * Math.sin(t * 6);
         ctx.strokeStyle = 'rgba(255,255,255,' + (0.5 + 0.5 * pu).toFixed(3) + ')'; ctx.lineWidth = 2;
@@ -342,7 +367,8 @@
         ctx.beginPath(); ctx.arc(b.trail[idx * 2], b.trail[idx * 2 + 1], rr, 0, TAU); ctx.fill();
       }
       ctx.globalAlpha = 1;
-      ctx.drawImage(spr, b.x - 24, b.y - 24, 48, 48);
+      var gs = b.r * 4; // glow scales with the ball (48px for the normal 6px ball)
+      ctx.drawImage(spr, b.x - gs, b.y - gs, gs * 2, gs * 2);
       ctx.fillStyle = g.bomb ? '#ff7a3d' : '#ffffff';
       ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, TAU); ctx.fill();
       if (g.bomb) {

@@ -108,9 +108,10 @@
         ballLight: 84, paddleLight: 96, capsuleLight: 34, glowLight: 30,
         lanternLight: 125, lanternTime: 8, // glow bricks leave a lantern this big for this long (s)
         flashLight: 46, flashTime: 0.45,  // brief light where any brick breaks
-        easyLightMult: 1.3, outline: 0.2  // faint outline on every brick still standing
+        easyLightMult: 1.3, outline: 0.2, // faint outline on every brick still standing
+        coreLight: 46                     // a core (the target) always glows a little
       },
-      redblue: { swapCooldown: 0.5, autoSwap: 3 },   // autoSwap: seconds with nothing solid left to hit before colours swap by themselves
+      redblue: { swapCooldown: 0.5, autoSwap: 3, idleSwap: 0 }, // autoSwap: seconds with nothing solid left to hit before colours swap by themselves; idleSwap (0 = off): swap anyway after this long without a switch hit
       beat: { period: 3.4, warn: 0.6 },   // seconds for a full cycle (each group solid half of it); warning before a brick turns solid
       overgrown: { growEvery: 5, sproutTime: 1.4, extraPerRoot: 7, maxRow: 13, ballMargin: 12, witherEvery: 0.06 },
       // World 5
@@ -120,7 +121,33 @@
         every: 5.5, telegraph: 1.8, fallSpeed: 62, settleSpeed: 170, pieces: 12, grace: 2,
         floorRow: 20, overflowRow: 2, clearRowsOnLife: 6, ballMargin: 3
       },
-      bounces: { count: 12, failDelay: 0.7 }
+      bounces: { count: 12, failDelay: 0.7 },
+      // World 7
+      ice: {
+        follow: 9, grip: 6,               // paddle chases the finger at follow/s; grip/s: how fast its slide changes (lower = slippier)
+        followEasy: 11, gripEasy: 14,     // Easy: a much milder slide
+        bounce: 0.35                      // share of its speed the paddle keeps when it slides into a wall
+      },
+      tide: {
+        low: 612, high: 352, period: 20,  // water surface y at low and high tide; seconds for a full rise and fall
+        ballMul: 0.62, ease: 7,           // ball speed under water; how quickly it slows down / speeds up (1/s)
+        paddleCap: 520, paddleCapEasy: 760 // paddle top speed (px/s) under water
+      },
+      redhot: { hotAt: 3, hotAtEasy: 2, burns: 3 }, // bricks hit without touching the paddle to glow; bricks it then burns through
+      thunder: {
+        first: 4, calmMin: 4.5, calmMax: 7, telegraph: 1.7, telegraphEasy: 2.4, width: 36,
+        freeze: 0.85, freezeEasy: 0.45,   // seconds a struck paddle is frozen (Hard scales up a little)
+        thawNearEasy: 190,                // Easy: a frozen paddle thaws at once when a falling ball gets this close
+        aimAtPaddle: 0.3                  // chance a strike is aimed at the paddle (never on Easy)
+      },
+      // World 8
+      runaway: {
+        radius: 58, speed: 78, stamina: 6, staminaEasy: 3.5, // how close the ball gets before a brick runs, how fast, for how long (s)
+        tiredWhenLeft: 3, giveUpAfter: 25, maxY: 372         // last few tire twice as fast; all give up after this long with no catch
+      },
+      bigsmall: { bigR: 12, bigSpeed: 0.78, bigPierce: 3, smallR: 4.2, smallSpeed: 1.22, split: 3, splitCooldown: 0.3 },
+      walls: { speed: 2.2, maxIn: 62, shove: 34, grace: 3, shoveCooldown: 0.4, reliefOnLife: 40, gap: 30 },
+      mirrors: { len: 36, lenEasy: 46, thick: 4, maxChain: 6, flipClear: 6 }
     },
 
     bosses: {
@@ -131,6 +158,18 @@
       rival: {
         coreHp: 5, paddleW: 66, y: 204, speed: 150, accel: 1100, react: 0.18, aimErr: 22, sight: 150,
         cheekyAim: 14, dizzy: 2.6, tauntChance: 0.35
+      },
+      twins: {
+        hp: 4, revive: 9, reviveEasy: 13, swapEvery: 6.5, warn: 1.2, bodyRadius: 20,
+        ringRadius: 44, ringSpin: 0.7, bob: 10, reviveHpFrac: 0.5
+      },
+      stormcloud: {
+        hp: 7, bodyRadius: 34, drift: 70, idle: 4.2, charge: 1.3, open: 3.6, // seconds: raining, charging (tell), vulnerable after the flash
+        dropEvery: 1.1, dropSpeed: 95, shrinkTime: 4, shrinkTimeEasy: 2.2, freeze: 0.7, freezeEasy: 0.35, boltWidth: 40
+      },
+      machine: {
+        hp: [3, 3, 4], coreRadius: 17, transition: 2.4, // core hits per phase (Normal), seconds between phases
+        sway: 50, swayPeriod: 7
       }
     },
 
