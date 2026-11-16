@@ -1,0 +1,755 @@
+// Level state: paddle, balls, bricks, capsules, lasers, lives, score, combo, rules. No DOM.
+// Outside code (main.js) plugs sound/particles in through game.fx.
+(function (BT) {
+  'use strict';
+
+  var C = BT.CONFIG, P = BT.Physics, HIT = BT.Physics.HIT;
+  var NOOP = function () {};
+
+  function mulberry32(seed) {
+    var a = seed >>> 0;
+    return function () {
+      a = (a + 0x6D2B79F5) >>> 0;
+      var t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function Game(level, presetName, opts) {
+    opts = opts || {};
+    this.cfg = C;
+    this.level = level;
+    this.presetName = presetName;
+    this.preset = C.presets[presetName] || C.presets.normal;
+    this.rng = mulberry32(opts.seed != null ? opts.seed : ((Math.random() * 1e9) | 0));
+    this.fx = {
+      sound: NOOP, burst: NOOP, ring: NOOP, text: NOOP, shake: NOOP
+    };
+    if (opts.fx) for (var k in opts.fx) this.fx[k] = opts.fx[k];
+
+    this.t = 0;              // level time (animations)
+    this.clock = 0;          // play time for par (only while a ball is in play)
+    this.sinceLaunch = 0;
+    this.sinceHit = 0;
+    this.state = 'serve';    // serve | play | clearing | won | lost
+    this.lives = this.preset.lives;
+    this.livesLost = 0;
+    this.score = 0;
+    this.combo = 0;
+    this.paddleHits = 0;
+    this.ballSpeed = this.preset.speedStart;
+    this.timeScale = 1;
+    this.clearTimer = 0;
+    this.result = null;
+    this.keyDir = 0;
+    this.netActive = !!this.preset.net;
+    this.netFlash = 0;
+    this.shakeAmt = 0;
+    this.bomb = false;
+    this.laserCd = 0;
+    this.autoFireT = 0;
+    this.eff = { long: 0, slow: 0, 'catch': 0, laser: 0, shrink: 0, flip: 0, daze: 0 };
+    this.blasts = [];
+    this.balls = [];
+    this.bricks = [];
+    this.capsules = [];
+    this.lasers = [];
+    for (var i = 0; i < 24; i++) this.lasers.push({ x: 0, y: 0, alive: false });
+
+    var pw = this.preset.paddleW;
+    this.paddle = {
+      x: C.W / 2, y: C.paddle.y, w: pw, h: C.paddle.h, targetX: C.W / 2,
+      prevX: C.W / 2, vx: 0, kv: 0, squash: 0, hitFlash: 0
+    };
+
+    this.buildGrid(level.grid || []);
+    this.rules = [];
+    this.boss = null;
+    var rl = level.rules || [];
+    for (var r = 0; r < rl.length; r++) this.addRule(rl[r]);
+    this.finalizeBricks();
+    this.newServeBall();
+  }
+
+  var G = Game.prototype;
+
+  // ---------- setup ----------
+  G.buildGrid = function (grid) {
+    var g = C.grid;
+    var ox = (g.cellW - g.brickW) / 2, oy = (g.cellH - g.brickH) / 2;
+    for (var row = 0; row < grid.length; row++) {
+      var line = grid[row];
+      for (var col = 0; col < line.length; col++) {
+        var b = BT.Bricks.fromChar(line[col], col * g.cellW + ox, g.top + row * g.cellH + oy, g.brickW, g.brickH);
+        if (!b) continue;
+        b.row = row; b.col = col; b.grid = true;
+        this.bricks.push(b);
+      }
+    }
+  };
+
+  G.addBrick = function (b) { this.bricks.push(b); return b; };
+
+  G.addRule = function (spec) {
+    var mod = BT.Rules.registry[spec.id];
+    if (!mod) throw new Error('Unknown rule: ' + spec.id);
+    var defaults = (mod.boss ? C.bosses[spec.id] : C.rules[spec.id]) || {};
+    var p = {};
+    var k;
+    for (k in defaults) p[k] = defaults[k];
+    for (k in spec) if (k !== 'id') p[k] = spec[k];
+    var inst = { id: spec.id, mod: mod, p: p, s: {} };
+    this.rules.push(inst);
+    if (mod.init) mod.init(this, inst);
+    if (mod.boss && !this.boss) this.boss = inst;
+    return inst;
+  };
+
+  G.finalizeBricks = function () {
+    var bs = this.bricks;
+    for (var i = 0; i < bs.length; i++) {
+      var b = bs[i];
+      b.x = b.bx + b.dx; b.y = b.by + b.dy;
+    }
+  };
+
+  G.newBall = function (x, y, vx, vy) {
+    var n = C.ball.trailLength;
+    var ball = {
+      x: x, y: y, vx: vx || 0, vy: vy || 0, r: C.ball.radius, prevX: x, prevY: y,
+      stuck: false, stuckOffset: 0, stuckTimer: 0, boost: 1, dead: false,
+      portalLock: -1, trail: new Float32Array(n * 2), trailN: 0, trailI: 0, id: 0
+    };
+    this.balls.push(ball);
+    return ball;
+  };
+
+  G.newServeBall = function () {
+    this.balls.length = 0;
+    var p = this.paddle;
+    var b = this.newBall(p.x, p.y - p.h / 2 - C.ball.radius, 0, 0);
+    b.stuck = true; b.stuckOffset = 0; b.serve = true;
+    return b;
+  };
+
+  G.hazardsActive = function (grace) {
+    return this.state === 'play' && this.sinceLaunch >= (grace || 0);
+  };
+
+  G.speed = function () {
+    return this.ballSpeed * (this.eff.slow > 0 ? C.capsule.slowMult : 1);
+  };
+
+  G.normalizeBall = function (ball) {
+    var s = Math.min(this.speed() * ball.boost, C.ball.absMaxSpeed);
+    P.normalizeVel(ball, s, C.ball.minVyFrac);
+  };
+
+  // ---------- input API ----------
+  G.dragBy = function (dx) {
+    var s = C.paddle.touchSensitivity * (this.eff.flip > 0 ? -1 : 1);
+    this.paddle.targetX += dx * s;
+    this.clampTarget();
+  };
+  G.pointTo = function (x) {
+    this.paddle.targetX = this.eff.flip > 0 ? C.W - x : x;
+    this.clampTarget();
+  };
+  G.clampTarget = function () {
+    var hw = this.paddle.w / 2 + C.paddle.edgeMargin;
+    this.paddle.targetX = P.clamp(this.paddle.targetX, hw, C.W - hw);
+  };
+
+  // Tap / click / Space: launch, release a caught ball, fire lasers.
+  G.tap = function () {
+    if (this.state !== 'serve' && this.state !== 'play') return;
+    var released = false;
+    for (var i = 0; i < this.balls.length; i++) {
+      var b = this.balls[i];
+      if (b.stuck) { this.releaseBall(b); released = true; }
+    }
+    if (this.state === 'serve' && released) {
+      this.state = 'play';
+      this.sinceLaunch = 0;
+    }
+    if (this.eff.laser > 0) this.fireLaser();
+  };
+
+  G.releaseBall = function (b) {
+    var p = this.paddle;
+    var a;
+    if (b.serve) {
+      var spread = C.ball.launchSpreadDeg;
+      a = (this.rng() * 2 - 1) * spread * P.DEG;
+      a += P.clamp(p.vx * C.ball.englishPerSpeed, -C.ball.englishMaxDeg, C.ball.englishMaxDeg) * P.DEG;
+    } else {
+      a = P.paddleAngle(b.x, p.x, p.w / 2, p.vx, C.ball);
+    }
+    var s = this.speed();
+    b.vx = Math.sin(a) * s; b.vy = -Math.cos(a) * s;
+    b.stuck = false; b.serve = false;
+    this.fx.sound('launch');
+  };
+
+  G.fireLaser = function () {
+    if (this.laserCd > 0) return;
+    this.laserCd = C.laser.cooldown;
+    var p = this.paddle, n = 0;
+    for (var i = 0; i < this.lasers.length && n < 2; i++) {
+      var L = this.lasers[i];
+      if (L.alive) continue;
+      L.alive = true; L.x = n === 0 ? p.x - p.w / 2 + 6 : p.x + p.w / 2 - 6; L.y = p.y - p.h / 2;
+      n++;
+    }
+    this.fx.sound('laser');
+  };
+
+  // ---------- main step ----------
+  G.step = function (dt) {
+    if (this.state === 'won' || this.state === 'lost') { this.t += dt; return; }
+    this.t += dt;
+    if (this.state === 'play' || this.state === 'clearing') { this.clock += dt; this.sinceLaunch += dt; }
+    if (this.shakeAmt > 0) this.shakeAmt = Math.max(0, this.shakeAmt - C.shake.decay * dt);
+    if (this.netFlash > 0) this.netFlash -= dt;
+
+    this.updateEffects(dt);
+    this.updatePaddle(dt);
+
+    // rules move bricks: reset offsets, let rules write base positions / offsets, then finalize
+    var bs = this.bricks, i;
+    for (i = 0; i < bs.length; i++) { bs[i].dx = 0; bs[i].dy = 0; if (bs[i].flash > 0) bs[i].flash -= dt; }
+    for (i = 0; i < this.rules.length; i++) {
+      var r = this.rules[i];
+      if (r.mod.update) r.mod.update(this, r, dt);
+      if (this.state === 'lost') return;
+    }
+    this.finalizeBricks();
+
+    this.updateBlasts(dt);
+    this.updateBalls(dt);
+    this.updateCapsules(dt);
+    this.updateLasers(dt);
+
+    if (this.state === 'play') {
+      this.sinceHit += dt;
+      if (this.sinceHit > C.ball.stuckSeconds) this.nudgeBalls();
+    }
+
+    // prune occasionally (dead bricks are skipped everywhere, compaction keeps loops short)
+    if ((this.t * 4 | 0) !== ((this.t - dt) * 4 | 0)) this.compact();
+
+    if (this.state === 'play' && this.isCleared()) this.beginClear();
+    if (this.state === 'clearing') {
+      this.clearTimer += dt;
+      this.timeScale = C.slowmo.scale;
+      if (this.clearTimer >= C.slowmo.duration * C.slowmo.scale) this.finishWin();
+    }
+  };
+
+  G.compact = function () {
+    var bs = this.bricks, j = 0;
+    for (var i = 0; i < bs.length; i++) if (bs[i].alive || bs[i].keepDead) bs[j++] = bs[i];
+    bs.length = j;
+  };
+
+  G.updateEffects = function (dt) {
+    var e = this.eff;
+    for (var k in e) if (e[k] > 0) { e[k] -= dt; if (e[k] < 0) e[k] = 0; }
+    if (this.laserCd > 0) this.laserCd -= dt;
+    if (e.laser > 0 && this.presetName === 'easy' && C.laser.autoFireOnEasy && this.state === 'play') {
+      this.autoFireT -= dt;
+      if (this.autoFireT <= 0) { this.autoFireT = C.laser.autoInterval; this.fireLaser(); }
+    }
+  };
+
+  G.updatePaddle = function (dt) {
+    var p = this.paddle, cp = C.paddle;
+    var e = this.eff;
+    var tw = this.preset.paddleW;
+    if (e.long > 0) tw *= C.capsule.longMult;
+    if (e.shrink > 0) tw *= C.capsule.shrinkMult;
+    if (e.daze > 0) tw *= C.bosses.gatekeeper.dazeMult;
+    p.w += (tw - p.w) * Math.min(1, cp.widthLerp * dt);
+
+    var kd = this.keyDir * (e.flip > 0 ? -1 : 1);
+    if (kd !== 0) {
+      var want = kd * cp.keySpeed;
+      var dv = want - p.kv, maxDv = cp.keyAccel * dt;
+      p.kv += P.clamp(dv, -maxDv, maxDv);
+      p.targetX = p.x + p.kv * dt;
+    } else {
+      p.kv = 0;
+    }
+    this.clampTarget();
+    p.prevX = p.x;
+    var dx = p.targetX - p.x, maxStep = cp.maxSpeed * dt;
+    p.x += P.clamp(dx, -maxStep, maxStep);
+    var hw = p.w / 2;
+    p.x = P.clamp(p.x, hw, C.W - hw);
+    var inst = (p.x - p.prevX) / dt;
+    p.vx += (inst - p.vx) * 0.5;
+    if (p.squash > 0) p.squash -= dt;
+    if (p.hitFlash > 0) p.hitFlash -= dt;
+  };
+
+  // ---------- balls ----------
+  G.updateBalls = function (dt) {
+    var balls = this.balls, p = this.paddle, i;
+    for (i = 0; i < balls.length; i++) {
+      var b = balls[i];
+      if (b.dead) continue;
+      if (b.stuck) {
+        b.x = P.clamp(p.x + b.stuckOffset, b.r, C.W - b.r);
+        b.y = p.y - p.h / 2 - b.r;
+        b.prevX = b.x; b.prevY = b.y;
+        if (!b.serve) {
+          b.stuckTimer += dt;
+          if (b.stuckTimer > C.ball.catchHoldSeconds) this.releaseBall(b);
+        }
+        this.pushTrail(b);
+        continue;
+      }
+      if (b.boost > 1) b.boost = Math.max(1, b.boost - C.ball.boostDecay * dt);
+      this.moveBall(b, dt);
+      if (!b.dead) {
+        for (var r = 0; r < this.rules.length; r++) {
+          var ru = this.rules[r];
+          if (ru.mod.onBallStep) ru.mod.onBallStep(this, ru, b, dt);
+        }
+        this.normalizeBall(b);
+        this.keepInside(b);
+      }
+      this.pushTrail(b);
+    }
+    // remove dead balls
+    var j = 0;
+    for (i = 0; i < balls.length; i++) if (!balls[i].dead) balls[j++] = balls[i];
+    balls.length = j;
+    if (j === 0 && (this.state === 'play' || this.state === 'serve')) this.loseLife('fell');
+    if (j === 0 && this.state === 'clearing') this.newServeBall();
+  };
+
+  G.pushTrail = function (b) {
+    var n = b.trail.length / 2;
+    b.trail[b.trailI * 2] = b.x; b.trail[b.trailI * 2 + 1] = b.y;
+    b.trailI = (b.trailI + 1) % n;
+    if (b.trailN < n) b.trailN++;
+  };
+
+  G.keepInside = function (b) {
+    if (b.x < b.r) { b.x = b.r; if (b.vx < 0) b.vx = -b.vx; }
+    if (b.x > C.W - b.r) { b.x = C.W - b.r; if (b.vx > 0) b.vx = -b.vx; }
+    if (b.y < C.TOP + b.r) { b.y = C.TOP + b.r; if (b.vy < 0) b.vy = -b.vy; }
+    if (!(b.x === b.x) || !(b.y === b.y)) { // NaN guard
+      b.x = this.paddle.x; b.y = 400; b.vx = 0; b.vy = -1; this.normalizeBall(b);
+    }
+  };
+
+  G.moveBall = function (b, dt) {
+    this.normalizeBall(b);
+    var speed = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
+    var n = Math.max(1, Math.ceil(speed * dt / (b.r * 0.5)));
+    var sdt = dt / n;
+    b.prevX = b.x; b.prevY = b.y;
+    var damaged = false;
+    var p = this.paddle;
+    for (var s = 0; s < n; s++) {
+      b.x += b.vx * sdt; b.y += b.vy * sdt;
+
+      // walls
+      if (b.x < b.r) { b.x = b.r; if (b.vx < 0) { b.vx = -b.vx; this.fx.sound('wall'); } }
+      else if (b.x > C.W - b.r) { b.x = C.W - b.r; if (b.vx > 0) { b.vx = -b.vx; this.fx.sound('wall'); } }
+      if (b.y < C.TOP + b.r) { b.y = C.TOP + b.r; if (b.vy < 0) { b.vy = -b.vy; this.fx.sound('wall'); } }
+
+      // paddle
+      if (b.vy > 0) {
+        var hw = p.w / 2, ph = p.h / 2;
+        if (P.circleRect(b.x, b.y, b.r, p.x - hw, p.y - ph, p.w, p.h) > 0) {
+          if (b.y <= p.y + 1) this.paddleBounce(b);
+          else { // clipped the side of the paddle: knock sideways, it is on its way out
+            b.x = b.x < p.x ? p.x - hw - b.r : p.x + hw + b.r;
+            b.vx = (b.x < p.x ? -1 : 1) * Math.abs(b.vx);
+          }
+        }
+      }
+
+      // Easy safety net
+      if (this.netActive && b.vy > 0 && b.y + b.r >= C.net.y && this.state !== 'clearing') {
+        b.y = C.net.y - b.r; b.vy = -Math.abs(b.vy);
+        this.netActive = false; this.netFlash = 0.6;
+        this.fx.sound('net'); this.fx.text(b.x, C.net.y - 20, 'Saved!', '#7cf5ff');
+        this.fx.burst(b.x, C.net.y, '#7cf5ff', 14, 'spark');
+        this.combo = 0;
+      }
+
+      // bricks (resolve up to two contacts: seams and inside corners)
+      for (var pass = 0; pass < 2; pass++) {
+        var hitB = this.deepestBrick(b);
+        if (!hitB) break;
+        b.x += HIT.nx * HIT.depth; b.y += HIT.ny * HIT.depth;
+        var nx = HIT.nx, ny = HIT.ny;
+        var reflected = P.reflect(b, nx, ny);
+        if (reflected) P.normalizeVel(b, speed, C.ball.minVyFrac);
+        if (!damaged && reflected) {
+          damaged = true;
+          this.hitBrick(hitB, b, 'ball');
+        }
+      }
+
+      if (b.y - b.r > C.H) { b.dead = true; return; }
+    }
+  };
+
+  var bestN = { nx: 0, ny: 0, d: 0 };
+  G.deepestBrick = function (b) {
+    var bs = this.bricks, best = null, bestD = 0;
+    var r = b.r, x = b.x, y = b.y;
+    for (var i = 0; i < bs.length; i++) {
+      var k = bs[i];
+      if (!k.alive || !k.solid) continue;
+      var d = 0;
+      if (x + r > k.x && x - r < k.x + k.w && y + r > k.y && y - r < k.y + k.h) {
+        d = P.circleRect(x, y, r, k.x, k.y, k.w, k.h);
+      } else if (k.wrap) {
+        var gx = k.x + k.w > C.W ? k.x - C.W : (k.x < 0 ? k.x + C.W : null);
+        if (gx !== null) d = P.circleRect(x, y, r, gx, k.y, k.w, k.h);
+      }
+      if (d > bestD) { bestD = d; best = k; bestN.nx = HIT.nx; bestN.ny = HIT.ny; }
+    }
+    if (best) { HIT.nx = bestN.nx; HIT.ny = bestN.ny; HIT.depth = bestD; }
+    return best;
+  };
+
+  G.paddleBounce = function (b) {
+    var p = this.paddle;
+    b.y = p.y - p.h / 2 - b.r;
+    var a = P.paddleAngle(b.x, p.x, p.w / 2, p.vx, C.ball);
+    var s = Math.min(this.speed() * b.boost, C.ball.absMaxSpeed);
+    b.vx = Math.sin(a) * s; b.vy = -Math.cos(a) * s;
+    p.squash = C.paddle.squashTime;
+    p.hitFlash = 0.1;
+    this.combo = 0;
+    this.paddleHits++;
+    if (this.paddleHits % C.ball.speedUpEvery === 0) {
+      this.ballSpeed = Math.min(this.preset.speedMax, this.ballSpeed + C.ball.speedUpStep);
+    }
+    this.fx.sound('paddle', a);
+    if (this.eff['catch'] > 0 && this.state === 'play') {
+      b.stuck = true; b.stuckOffset = b.x - p.x; b.stuckTimer = 0;
+      b.vx = 0; b.vy = 0;
+    }
+    for (var i = 0; i < this.rules.length; i++) {
+      var r = this.rules[i];
+      if (r.mod.onPaddleHit) r.mod.onPaddleHit(this, r, b);
+    }
+  };
+
+  G.nudgeBalls = function () {
+    var done = false;
+    for (var i = 0; i < this.balls.length; i++) {
+      var b = this.balls[i];
+      if (b.stuck || b.y > C.H * 0.62) continue;
+      var deg = C.ball.nudgeMinDeg + this.rng() * (C.ball.nudgeMaxDeg - C.ball.nudgeMinDeg);
+      P.rotateVel(b, (this.rng() < 0.5 ? -1 : 1) * deg * P.DEG);
+      this.normalizeBall(b);
+      done = true;
+    }
+    if (done) this.sinceHit = 0;
+  };
+
+  // ---------- bricks ----------
+  G.hitBrick = function (k, ball, cause) {
+    // note: only real progress (damage, rule effects) resets the no-hit timer, not steel clangs
+    for (var i = 0; i < this.rules.length; i++) {
+      var r = this.rules[i];
+      if (r.mod.onBrickHit && r.mod.onBrickHit(this, r, k, ball, cause)) return;
+    }
+    if (ball && this.bomb && cause === 'ball') {
+      this.bomb = false;
+      this.explode(k.x + k.w / 2, k.y + k.h / 2, C.bomb.radius, 'bomb');
+      if (k.alive) this.damageBrick(k, ball, cause);
+      return;
+    }
+    this.damageBrick(k, ball, cause);
+  };
+
+  G.damageBrick = function (k, ball, cause) {
+    k.flash = 0.12;
+    if (!k.breakable) {
+      k.shake = 0.15;
+      this.fx.sound(k.type === 'locked' ? 'locked' : 'steel');
+      return;
+    }
+    this.sinceHit = 0;
+    k.hp--;
+    if (k.hp <= 0) this.destroyBrick(k, cause);
+    else {
+      this.fx.sound('armour', this.combo);
+      this.fx.burst(k.x + k.w / 2, k.y + k.h / 2, '#c9d6ee', 4, 'chip');
+    }
+  };
+
+  G.destroyBrick = function (k, cause) {
+    if (!k.alive) return;
+    k.alive = false;
+    this.sinceHit = 0;
+    this.combo++;
+    var mult = Math.min(this.combo, C.combo.maxMult);
+    var pts = (C.score.brick + (k.maxHp - 1) * C.score.armourExtra) * mult;
+    var cx = k.x + k.w / 2, cy = k.y + k.h / 2;
+    this.score += pts;
+    this.fx.burst(cx, cy, k.color, 10, 'chip');
+    this.fx.sound('break', this.combo);
+    if (this.combo >= 3) this.fx.text(cx, cy, 'x' + mult, '#ffffff');
+
+    if (k.type === 'key') this.unlockAll(cx, cy);
+    if (k.type === 'tnt') this.blasts.push({ x: cx, y: cy, r: C.tnt.radius, t: C.tnt.chainDelay });
+
+    if (k.type === 'capsule' || k.cap) this.spawnCapsule(cx, cy, k.cap || null, true);
+    else if (k.type === 'normal' || k.type === 'armour') {
+      var ch = (this.level.capsuleChance != null ? this.level.capsuleChance : C.capsule.chance) * this.preset.capsuleMult;
+      if (this.rng() < ch) this.spawnCapsule(cx, cy, null, false);
+    }
+    for (var i = 0; i < this.rules.length; i++) {
+      var r = this.rules[i];
+      if (r.mod.onBrickDestroyed) r.mod.onBrickDestroyed(this, r, k, cause);
+    }
+  };
+
+  G.unlockAll = function (x, y) {
+    var bs = this.bricks;
+    for (var i = 0; i < bs.length; i++) {
+      var k = bs[i];
+      if (k.alive && k.type === 'locked') {
+        k.type = 'normal'; k.breakable = true; k.color = BT.Bricks.KEY_COLOR; k.flash = 0.4;
+        this.fx.burst(k.x + k.w / 2, k.y + k.h / 2, '#ffe680', 4, 'spark');
+      }
+    }
+    this.fx.sound('unlock');
+    this.fx.text(x, y, 'Unlocked!', '#ffe680');
+  };
+
+  G.explode = function (x, y, radius, cause) {
+    this.fx.sound('boom');
+    this.fx.ring(x, y, radius, '#ffb347');
+    this.fx.burst(x, y, '#ffb347', 18, 'spark');
+    this.shakeAmt = Math.max(this.shakeAmt, C.shake.tnt);
+    this.fx.shake(C.shake.tnt);
+    var bs = this.bricks;
+    for (var i = 0; i < bs.length; i++) {
+      var k = bs[i];
+      if (!k.alive || k.noBlast) continue;
+      var d = P.circleRect(x, y, radius, k.x, k.y, k.w, k.h);
+      if (d <= 2) continue;
+      if (k.blastDamage) { this.hitBrick(k, null, 'blast'); continue; }
+      this.destroyBrick(k, cause);
+    }
+  };
+
+  G.updateBlasts = function (dt) {
+    var q = this.blasts;
+    if (!q.length) return;
+    // only process blasts queued before this step; explode() appends chained ones at the end
+    var n = q.length, j = 0, i;
+    for (i = 0; i < n; i++) {
+      var e = q[i];
+      e.t -= dt;
+      if (e.t <= 0) this.explode(e.x, e.y, e.r, 'tnt');
+      else q[j++] = e;
+    }
+    for (i = n; i < q.length; i++) q[j++] = q[i];
+    q.length = j;
+  };
+
+  // ---------- capsules ----------
+  G.pickCapsule = function (goodOnly) {
+    var w = C.capsule.weights, total = 0, k;
+    var allowBad = this.preset.badCapsules && !goodOnly;
+    for (k in w) if (this.capsuleAllowed(k, allowBad)) total += w[k];
+    var r = this.rng() * total;
+    for (k in w) {
+      if (!this.capsuleAllowed(k, allowBad)) continue;
+      r -= w[k];
+      if (r <= 0) return k;
+    }
+    return 'long';
+  };
+  G.capsuleAllowed = function (k, allowBad) {
+    if (C.capsule.bad.indexOf(k) >= 0 && !allowBad) return false;
+    if (k === 'flip' && !C.capsule.flipEnabled) return false;
+    if (k === 'life' && this.lives >= 9) return false;
+    return true;
+  };
+
+  G.spawnCapsule = function (x, y, type, force) {
+    var n = 0;
+    for (var i = 0; i < this.capsules.length; i++) if (this.capsules[i].alive) n++;
+    if (n >= C.capsule.maxOnScreen && !force) return;
+    if (this.state === 'clearing') return;
+    type = type || this.pickCapsule(force);
+    // reuse a dead slot
+    for (i = 0; i < this.capsules.length; i++) {
+      var c = this.capsules[i];
+      if (!c.alive) { c.alive = true; c.type = type; c.x = x; c.y = y; c.t = 0; return c; }
+    }
+    c = { alive: true, type: type, x: x, y: y, t: 0, vx: 0 };
+    this.capsules.push(c);
+    return c;
+  };
+
+  G.updateCapsules = function (dt) {
+    var p = this.paddle, cw = C.capsule.w, chh = C.capsule.h;
+    for (var i = 0; i < this.capsules.length; i++) {
+      var c = this.capsules[i];
+      if (!c.alive) continue;
+      c.t += dt;
+      c.y += C.capsule.fallSpeed * dt;
+      c.x += (c.vx || 0) * dt;
+      c.x = P.clamp(c.x, cw / 2, C.W - cw / 2);
+      if (c.y - chh / 2 > C.H) { c.alive = false; continue; }
+      if (Math.abs(c.x - p.x) < (p.w + cw) / 2 && Math.abs(c.y - p.y) < (p.h + chh) / 2) {
+        c.alive = false;
+        this.applyCapsule(c.type, c.x, c.y);
+      }
+    }
+  };
+
+  var CAPSULE_TEXT = {
+    long: 'Long paddle', slow: 'Slow ball', multi: 'Multi ball', 'catch': 'Catch', laser: 'Lasers!',
+    bomb: 'Bomb ball', life: 'Extra life', shrink: 'Shrink!', flip: 'Flipped!'
+  };
+  BT.CAPSULE_TEXT = CAPSULE_TEXT;
+
+  G.applyCapsule = function (type, x, y) {
+    var d = C.capsule.durations, e = this.eff;
+    var bad = C.capsule.bad.indexOf(type) >= 0;
+    switch (type) {
+      case 'long': e.long = d.long; e.shrink = 0; break;
+      case 'shrink': e.shrink = d.shrink; e.long = 0; break;
+      case 'slow': e.slow = d.slow; break;
+      case 'catch': e['catch'] = d['catch']; break;
+      case 'laser': e.laser = d.laser; this.autoFireT = 0; break;
+      case 'flip': e.flip = d.flip; this.paddle.targetX = this.paddle.x; break;
+      case 'bomb': this.bomb = true; break;
+      case 'life': this.lives = Math.min(9, this.lives + 1); break;
+      case 'multi': this.splitBalls(); break;
+    }
+    this.score += 25;
+    this.fx.sound(bad ? 'powerdown' : 'powerup');
+    this.fx.text(x, y - 18, CAPSULE_TEXT[type] || type, bad ? '#ff8080' : '#9dffb0');
+  };
+
+  G.splitBalls = function () {
+    var src = null, i;
+    for (i = 0; i < this.balls.length; i++) if (!this.balls[i].dead) { src = this.balls[i]; break; }
+    if (!src) return;
+    if (src.stuck) { // launch the stuck one first so the copies have a direction
+      this.releaseBall(src);
+      if (this.state === 'serve') { this.state = 'play'; this.sinceLaunch = 0; }
+    }
+    for (var k = -1; k <= 1; k += 2) {
+      if (this.balls.length >= C.ball.maxBalls) break;
+      var nb = this.newBall(src.x, src.y, src.vx, src.vy);
+      P.rotateVel(nb, k * 25 * P.DEG);
+      if (nb.vy > 0 && src.vy < 0) nb.vy = -nb.vy;
+      this.normalizeBall(nb);
+    }
+  };
+
+  // ---------- lasers ----------
+  G.updateLasers = function (dt) {
+    var bs = this.bricks;
+    for (var i = 0; i < this.lasers.length; i++) {
+      var L = this.lasers[i];
+      if (!L.alive) continue;
+      L.y -= C.laser.speed * dt;
+      if (L.y < C.TOP) { L.alive = false; continue; }
+      var consumed = false;
+      for (var r = 0; r < this.rules.length && !consumed; r++) {
+        var ru = this.rules[r];
+        if (ru.mod.onLaser && ru.mod.onLaser(this, ru, L)) consumed = true;
+      }
+      if (consumed) { L.alive = false; continue; }
+      for (var j = 0; j < bs.length; j++) {
+        var k = bs[j];
+        if (!k.alive || !k.solid) continue;
+        if (L.x > k.x - 1 && L.x < k.x + k.w + 1 && L.y > k.y && L.y < k.y + k.h + 8) {
+          L.alive = false;
+          this.hitBrick(k, null, 'laser');
+          break;
+        }
+      }
+    }
+  };
+
+  // ---------- lives / win ----------
+  G.loseLife = function (reason) {
+    if (this.state !== 'play' && this.state !== 'serve') return;
+    this.lives--;
+    this.livesLost++;
+    this.combo = 0;
+    this.bomb = false;
+    for (var k in this.eff) this.eff[k] = 0;
+    for (var i = 0; i < this.capsules.length; i++) this.capsules[i].alive = false;
+    for (i = 0; i < this.lasers.length; i++) this.lasers[i].alive = false;
+    this.fx.sound('lose');
+    this.fx.shake(C.shake.life);
+    this.shakeAmt = Math.max(this.shakeAmt, C.shake.life);
+    for (i = 0; i < this.rules.length; i++) {
+      var r = this.rules[i];
+      if (r.mod.onLifeLost) r.mod.onLifeLost(this, r, reason);
+    }
+    if (this.lives <= 0) {
+      this.lives = 0;
+      this.state = 'lost';
+      this.balls.length = 0;
+      this.fx.sound('gameover');
+      return;
+    }
+    this.netActive = !!this.preset.net;
+    this.state = 'serve';
+    this.newServeBall();
+  };
+
+  G.isCleared = function () {
+    var mode = this.level.clear || 'bricks';
+    if (mode === 'boss') return !!(this.boss && this.boss.s.defeated);
+    var bs = this.bricks;
+    for (var i = 0; i < bs.length; i++) {
+      var k = bs[i];
+      if (!k.alive) continue;
+      if (mode === 'core') { if (k.type === 'core') return false; }
+      else if (k.required) return false;
+    }
+    return true;
+  };
+
+  G.beginClear = function () {
+    this.state = 'clearing';
+    this.clearTimer = 0;
+    for (var i = 0; i < this.capsules.length; i++) this.capsules[i].alive = false;
+    this.fx.sound('lastbrick');
+  };
+
+  G.finishWin = function () {
+    this.state = 'won';
+    this.timeScale = 1;
+    var par = (this.level.par || 120) * this.preset.parScale;
+    var stars = 1;
+    if (this.livesLost === 0) { stars = 2; if (this.clock <= par) stars = 3; }
+    this.result = { stars: stars, time: this.clock, par: par, score: this.score, livesLost: this.livesLost };
+    this.fx.sound('win');
+  };
+
+  // Count of bricks the level needs destroyed (for HUD/tests).
+  G.requiredLeft = function () {
+    var n = 0, bs = this.bricks;
+    for (var i = 0; i < bs.length; i++) if (bs[i].alive && bs[i].required) n++;
+    return n;
+  };
+
+  BT.Game = Game;
+  BT.mulberry32 = mulberry32;
+})(typeof window !== 'undefined' ? (window.BT = window.BT || {}) : (globalThis.BT = globalThis.BT || {}));
