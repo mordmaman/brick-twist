@@ -9,6 +9,11 @@
 //   L                   locked (acts as steel until the key is hit)
 //   C                   capsule brick (always drops a capsule)
 //   A                   anchor (Squeeze: hit to shove the wall up; unbreakable)
+//   G                   glow brick (Lights Out: leaves a lantern glowing where it broke)
+//   R B                 red / blue switchable bricks (Red/Blue: only one colour is solid at a time)
+//   S                   switch (Red/Blue: hit to swap colours; unbreakable, not needed to clear)
+//   V                   vine (Overgrown: regrows from its root)
+//   O                   root (Overgrown: armoured; kill it and its vines wither)
 (function (BT) {
   'use strict';
 
@@ -23,6 +28,12 @@
   var LOCK_COLOR = '#b8912e';
   var CAPSULE_BRICK_COLOR = '#ffffff';
   var ANCHOR_COLOR = '#3dd6c6';
+  var GLOW_COLOR = '#ffe27a';
+  var RED_COLOR = '#ff4d5e';
+  var BLUE_COLOR = '#3d8bff';
+  var SWITCH_COLOR = '#d8dcea';
+  var VINE_COLOR = '#3fcf6a';
+  var ROOT_COLOR = '#8a5a34';
 
   function make(type, x, y, w, h) {
     return {
@@ -63,6 +74,18 @@
         b = make('capsule', x, y, w, h); b.color = CAPSULE_BRICK_COLOR; return b;
       case 'A':
         b = make('anchor', x, y, w, h); b.breakable = false; b.required = false; b.noBlast = true; b.color = ANCHOR_COLOR; return b;
+      case 'G':
+        b = make('glow', x, y, w, h); b.color = GLOW_COLOR; return b;
+      case 'R':
+        b = make('normal', x, y, w, h); b.color = RED_COLOR; b.group = 'red'; b.mark = 'dot'; return b;
+      case 'B':
+        b = make('normal', x, y, w, h); b.color = BLUE_COLOR; b.group = 'blue'; b.mark = 'square'; return b;
+      case 'S':
+        b = make('switch', x, y, w, h); b.breakable = false; b.required = false; b.noBlast = true; b.color = SWITCH_COLOR; return b;
+      case 'V':
+        b = make('vine', x, y, w, h); b.color = VINE_COLOR; return b;
+      case 'O':
+        b = make('root', x, y, w, h); b.hp = b.maxHp = 3; b.color = ROOT_COLOR; return b;
     }
     return null;
   }
@@ -73,7 +96,8 @@
   BT.Bricks = {
     COLORS: COLORS, ARMOUR_COLOR: ARMOUR_COLOR, STEEL_COLOR: STEEL_COLOR, TNT_COLOR: TNT_COLOR,
     KEY_COLOR: KEY_COLOR, LOCK_COLOR: LOCK_COLOR, ANCHOR_COLOR: ANCHOR_COLOR,
+    GLOW_COLOR: GLOW_COLOR, RED_COLOR: RED_COLOR, BLUE_COLOR: BLUE_COLOR, VINE_COLOR: VINE_COLOR, ROOT_COLOR: ROOT_COLOR,
     make: make, fromChar: fromChar, isHardWall: isHardWall,
-    LEGEND: '.rroygcbpmw23#TKLCA'
+    LEGEND: '.rroygcbpmw23#TKLCAGRBSVO'
   };
 })(typeof window !== 'undefined' ? (window.BT = window.BT || {}) : (globalThis.BT = globalThis.BT || {}));

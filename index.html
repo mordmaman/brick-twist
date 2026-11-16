@@ -128,13 +128,37 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
       portals: { radius: 17, captureFrac: 0.65 },
       wells: { accelAt60: 820, minDist: 22, planetRadius: 12, predictSeconds: 1.0, predictAimSeconds: 1.4 },
       gusts: { accel: 560, calmMin: 3.2, calmMax: 5, warn: 1.3, gust: 1.6, firstDelay: 3.5 },
-      pinball: { bumperRadius: 14, boost: 1.35 }
+      pinball: { bumperRadius: 14, boost: 1.35 },
+      // World 4
+      lightsout: {
+        dark: 0.93, darkEasy: 0.84,      // how black the dark is (alpha), Normal/Hard and Easy
+        ballLight: 84, paddleLight: 96, capsuleLight: 34, glowLight: 30,
+        lanternLight: 125, lanternTime: 8, // glow bricks leave a lantern this big for this long (s)
+        flashLight: 46, flashTime: 0.45,  // brief light where any brick breaks
+        easyLightMult: 1.3, outline: 0.2  // faint outline on every brick still standing
+      },
+      redblue: { swapCooldown: 0.5, autoSwap: 3 },   // autoSwap: seconds with nothing solid left to hit before colours swap by themselves
+      beat: { period: 3.4, warn: 0.6 },   // seconds for a full cycle (each group solid half of it); warning before a brick turns solid
+      overgrown: { growEvery: 5, sproutTime: 1.4, extraPerRoot: 7, maxRow: 13, ballMargin: 12, witherEvery: 0.06 },
+      // World 5
+      double: { gap: 30, widthMult: 1.3, assist: 24, assistRate: 6 },
+      wrap: {},
+      brickfall: {
+        every: 5.5, telegraph: 1.8, fallSpeed: 62, settleSpeed: 170, pieces: 12, grace: 2,
+        floorRow: 20, overflowRow: 2, clearRowsOnLife: 6, ballMargin: 3
+      },
+      bounces: { count: 12, failDelay: 0.7 }
     },
 
     bosses: {
       gatekeeper: { eyeHp: 3, sway: 52, period: 6, spitEvery: 3.4, spitTell: 0.7, spitSpeed: 150, dazeSeconds: 3, dazeMult: 0.7 },
       serpent: { segments: 14, headHp: 5, vulnerableAt: 2, speedMin: 55, speedMax: 150, spacing: 20, size: 18, turnRate: 0.9 },
-      magnet: { hp: 8, pull: 3.4, warn: 0.7, repel: 3.0, pullAccel: 900, repelAccel: 380, flingRadius: 150, flingBoost: 1.3, bodyRadius: 26 }
+      magnet: { hp: 8, pull: 3.4, warn: 0.7, repel: 3.0, pullAccel: 900, repelAccel: 380, flingRadius: 150, flingBoost: 1.3, bodyRadius: 26 },
+      lighthouse: { hp: 10, bodyRadius: 20, beams: 2, beamHalfDeg: 30, spin: 0.5, spinPerHit: 0.04, beamLength: 420, invuln: 0.8 },
+      rival: {
+        coreHp: 5, paddleW: 66, y: 204, speed: 150, accel: 1100, react: 0.18, aimErr: 22, sight: 150,
+        cheekyAim: 14, dizzy: 2.6, tauntChance: 0.35
+      }
     },
 
     touch: { tapMaxMs: 280, tapMaxMove: 14 },
@@ -261,6 +285,11 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
 //   L                   locked (acts as steel until the key is hit)
 //   C                   capsule brick (always drops a capsule)
 //   A                   anchor (Squeeze: hit to shove the wall up; unbreakable)
+//   G                   glow brick (Lights Out: leaves a lantern glowing where it broke)
+//   R B                 red / blue switchable bricks (Red/Blue: only one colour is solid at a time)
+//   S                   switch (Red/Blue: hit to swap colours; unbreakable, not needed to clear)
+//   V                   vine (Overgrown: regrows from its root)
+//   O                   root (Overgrown: armoured; kill it and its vines wither)
 (function (BT) {
   'use strict';
 
@@ -275,6 +304,12 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
   var LOCK_COLOR = '#b8912e';
   var CAPSULE_BRICK_COLOR = '#ffffff';
   var ANCHOR_COLOR = '#3dd6c6';
+  var GLOW_COLOR = '#ffe27a';
+  var RED_COLOR = '#ff4d5e';
+  var BLUE_COLOR = '#3d8bff';
+  var SWITCH_COLOR = '#d8dcea';
+  var VINE_COLOR = '#3fcf6a';
+  var ROOT_COLOR = '#8a5a34';
 
   function make(type, x, y, w, h) {
     return {
@@ -315,6 +350,18 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
         b = make('capsule', x, y, w, h); b.color = CAPSULE_BRICK_COLOR; return b;
       case 'A':
         b = make('anchor', x, y, w, h); b.breakable = false; b.required = false; b.noBlast = true; b.color = ANCHOR_COLOR; return b;
+      case 'G':
+        b = make('glow', x, y, w, h); b.color = GLOW_COLOR; return b;
+      case 'R':
+        b = make('normal', x, y, w, h); b.color = RED_COLOR; b.group = 'red'; b.mark = 'dot'; return b;
+      case 'B':
+        b = make('normal', x, y, w, h); b.color = BLUE_COLOR; b.group = 'blue'; b.mark = 'square'; return b;
+      case 'S':
+        b = make('switch', x, y, w, h); b.breakable = false; b.required = false; b.noBlast = true; b.color = SWITCH_COLOR; return b;
+      case 'V':
+        b = make('vine', x, y, w, h); b.color = VINE_COLOR; return b;
+      case 'O':
+        b = make('root', x, y, w, h); b.hp = b.maxHp = 3; b.color = ROOT_COLOR; return b;
     }
     return null;
   }
@@ -325,8 +372,9 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
   BT.Bricks = {
     COLORS: COLORS, ARMOUR_COLOR: ARMOUR_COLOR, STEEL_COLOR: STEEL_COLOR, TNT_COLOR: TNT_COLOR,
     KEY_COLOR: KEY_COLOR, LOCK_COLOR: LOCK_COLOR, ANCHOR_COLOR: ANCHOR_COLOR,
+    GLOW_COLOR: GLOW_COLOR, RED_COLOR: RED_COLOR, BLUE_COLOR: BLUE_COLOR, VINE_COLOR: VINE_COLOR, ROOT_COLOR: ROOT_COLOR,
     make: make, fromChar: fromChar, isHardWall: isHardWall,
-    LEGEND: '.rroygcbpmw23#TKLCA'
+    LEGEND: '.rroygcbpmw23#TKLCAGRBSVO'
   };
 })(typeof window !== 'undefined' ? (window.BT = window.BT || {}) : (globalThis.BT = globalThis.BT || {}));
 
@@ -342,11 +390,16 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
 //                                    The game re-normalises speed afterwards.
 //   onBrickHit(g, r, brick, ball, cause)  return true to consume the hit (default damage skipped).
 //   onBrickDestroyed(g, r, brick, cause)
-//   onPaddleHit(g, r, ball)
+//   onPaddleHit(g, r, ball, xp)      xp is the extra paddle that was hit (undefined for yours).
 //   onLaser(g, r, bolt)              return true to absorb a laser bolt.
 //   onLifeLost(g, r, reason)
 //   render(ctx, g, r, layer, R)      layer is 'back' (under bricks) or 'front' (over balls).
 //                                    R is the renderer's helper set.
+//   renderOverBricks(ctx, g, r, R)   drawn over the bricks but under capsules, paddles and balls.
+//   beforeLifeLost(g, r, reason)     return true to handle a lost ball yourself (no life is lost).
+//   holdClear(g, r)                  return true while the level must not count as cleared yet.
+// Engine extension points a rule can switch on in init (see game.js): g.wrapX, g.topOpen,
+// g.addXPaddle(...), g.makeGhostable(brick) + b.wantGhost each step, g.paddle.off, g.retry().
 // Rules compose: each only touches its own state, its own bricks, or adds offsets/forces.
 (function (BT) {
   'use strict';
@@ -878,6 +931,726 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
     }
   });
 
+  // ======================================================================================
+  // World 4 - Lights and switches
+  // ======================================================================================
+
+  // ---------------- Lights Out: dark, lit around ball and paddle; glow bricks leave lanterns ----------------
+  // Darkness is drawn in the renderOverBricks hook: over the bricks but under capsules, paddle and balls,
+  // so those are always fully visible. Every standing brick keeps a faint outline so you can tell where they are.
+  var MAX_LIGHTS = 48;
+  register('lightsout', {
+    init: function (g, r) {
+      var s = r.s;
+      s.pool = [];
+      for (var i = 0; i < 20; i++) s.pool.push({ on: false, x: 0, y: 0, rad: 0, t: 0, max: 0 });
+      s.list = new Float32Array(MAX_LIGHTS * 4); // x, y, radius, strength
+      s.n = 0;
+    },
+    addLight: function (r, x, y, rad, time) {
+      var pool = r.s.pool, pick = pool[0];
+      for (var i = 0; i < pool.length; i++) {
+        if (!pool[i].on) { pick = pool[i]; break; }
+        if (pool[i].t < pick.t) pick = pool[i];
+      }
+      pick.on = true; pick.x = x; pick.y = y; pick.rad = rad; pick.t = time; pick.max = time;
+    },
+    update: function (g, r, dt) {
+      var pool = r.s.pool;
+      for (var i = 0; i < pool.length; i++) {
+        var L = pool[i];
+        if (L.on) { L.t -= dt; if (L.t <= 0) L.on = false; }
+      }
+    },
+    onBrickDestroyed: function (g, r, b) {
+      var p = r.p, cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+      if (b.type === 'glow') {
+        this.addLight(r, cx, cy, p.lanternLight, p.lanternTime);
+        g.fx.sound('lantern');
+        g.fx.burst(cx, cy, '#ffe27a', 14, 'spark');
+      } else this.addLight(r, cx, cy, p.flashLight, p.flashTime);
+    },
+    // Pure: fills r.s.list with every light this frame and returns the count (used by render and tests).
+    collectLights: function (g, r) {
+      var s = r.s, p = r.p, out = s.list, n = 0, i;
+      var m = g.presetName === 'easy' ? p.easyLightMult : 1;
+      function add(x, y, rad, a) {
+        if (n >= MAX_LIGHTS) return;
+        out[n * 4] = x; out[n * 4 + 1] = y; out[n * 4 + 2] = rad; out[n * 4 + 3] = a; n++;
+      }
+      for (i = 0; i < g.balls.length; i++) add(g.balls[i].x, g.balls[i].y, p.ballLight * m, 1);
+      var pd = g.paddle;
+      add(pd.x, pd.y - 6, (pd.w / 2 + p.paddleLight * 0.55) * m, 1);
+      for (i = 0; i < g.xpaddles.length; i++) add(g.xpaddles[i].x, g.xpaddles[i].y, (g.xpaddles[i].w / 2 + 30) * m, 1);
+      for (i = 0; i < g.capsules.length; i++) if (g.capsules[i].alive) add(g.capsules[i].x, g.capsules[i].y, p.capsuleLight * m, 1);
+      for (i = 0; i < g.bricks.length; i++) {
+        var b = g.bricks[i];
+        if (b.alive && b.type === 'glow') add(b.x + b.w / 2, b.y + b.h / 2, p.glowLight * m, 0.8);
+      }
+      for (i = 0; i < s.pool.length; i++) {
+        var L = s.pool[i];
+        if (!L.on) continue;
+        var f = L.max > 1 ? Math.min(1, L.t / 1.5) : L.t / L.max; // lanterns fade over their last 1.5 s
+        add(L.x, L.y, L.rad * m * (0.75 + 0.25 * f), f);
+      }
+      s.n = n;
+      return n;
+    },
+    renderOverBricks: function (ctx, g, r, R) {
+      var p = r.p, n = this.collectLights(g, r), out = r.s.list, i;
+      var dark = g.presetName === 'easy' ? p.darkEasy : p.dark;
+      var lay = R.layer('dark'), x = lay.ctx, spr = R.lightSprite();
+      x.globalCompositeOperation = 'source-over';
+      x.globalAlpha = 1;
+      x.clearRect(0, 0, C.W, C.H);
+      x.fillStyle = 'rgba(2,3,9,' + dark + ')';
+      x.fillRect(0, C.TOP, C.W, C.H - C.TOP);
+      x.globalCompositeOperation = 'destination-out';
+      for (i = 0; i < n; i++) {
+        var rad = out[i * 4 + 2];
+        x.globalAlpha = out[i * 4 + 3];
+        x.drawImage(spr, out[i * 4] - rad, out[i * 4 + 1] - rad, rad * 2, rad * 2);
+      }
+      x.globalCompositeOperation = 'source-over';
+      x.globalAlpha = 1;
+      ctx.drawImage(lay.canvas, 0, 0, C.W, C.H);
+      // faint outline of every standing brick, and glow bricks shine through the dark
+      ctx.save();
+      var outline = 'rgba(190,205,255,' + p.outline + ')';
+      for (i = 0; i < g.bricks.length; i++) {
+        var b = g.bricks[i];
+        if (!b.alive || b.customDraw) continue;
+        if (b.type === 'glow') {
+          var pu = 0.6 + 0.4 * Math.sin(g.t * 3 + b.x);
+          ctx.globalAlpha = 0.55 + 0.35 * pu;
+          R.drawBrick(ctx, b, g.t);
+          ctx.globalAlpha = 1;
+          continue;
+        }
+        ctx.lineWidth = 1; ctx.strokeStyle = outline;
+        R.roundRect(ctx, b.x + 0.5, b.y + 0.5, b.w - 1, b.h - 1, 3); ctx.stroke();
+      }
+      ctx.restore();
+    }
+  });
+
+  // ---------------- Red / Blue: hit a switch to swap which colour is solid ----------------
+  // params: start ('red' | 'blue'). Bricks with b.group (grid chars R and B) take part.
+  register('redblue', {
+    init: function (g, r) {
+      var s = r.s;
+      s.solid = r.p.start || 'red'; s.cd = 0; s.flash = 0;
+      for (var i = 0; i < g.bricks.length; i++) {
+        var b = g.bricks[i];
+        if (!b.group) continue;
+        g.makeGhostable(b);
+        if (b.group !== s.solid) { b.solid = false; b.ghost = 1; }
+      }
+    },
+    update: function (g, r, dt) {
+      var s = r.s, solidLeft = 0, ghostLeft = 0;
+      if (s.cd > 0) s.cd -= dt;
+      if (s.flash > 0) s.flash -= dt;
+      for (var i = 0; i < g.bricks.length; i++) {
+        var b = g.bricks[i];
+        if (!b.alive) continue;
+        if (b.group && b.group !== s.solid) { b.wantGhost = true; if (b.required) ghostLeft++; }
+        else if (b.required && b.breakable) solidLeft++;
+        if (b.type === 'switch') b.showing = s.solid;
+      }
+      // nothing solid left to aim at: swap by themselves after a moment so nobody gets stuck
+      if (ghostLeft && !solidLeft && g.state === 'play') {
+        s.idle = (s.idle || 0) + dt;
+        if (s.idle > r.p.autoSwap) this.swap(g, r, C.W / 2, 150);
+      } else s.idle = 0;
+    },
+    swap: function (g, r, x, y) {
+      var s = r.s;
+      s.cd = r.p.swapCooldown; s.idle = 0;
+      s.solid = s.solid === 'red' ? 'blue' : 'red';
+      s.flash = 0.35;
+      g.fx.sound('swap');
+      g.fx.text(x, y, s.solid === 'red' ? 'Red is solid!' : 'Blue is solid!', s.solid === 'red' ? '#ff8a94' : '#8ab8ff');
+    },
+    onBrickHit: function (g, r, b) {
+      if (b.type !== 'switch') return false;
+      b.flash = 0.2;
+      if (r.s.cd <= 0) {
+        this.swap(g, r, b.x + b.w / 2, b.y - 8);
+        g.fx.burst(b.x + b.w / 2, b.y + b.h / 2, '#ffffff', 8, 'spark');
+      } else g.fx.sound('gate');
+      return true;
+    },
+    render: function (ctx, g, r, layer, R) {
+      if (layer !== 'front') return;
+      // legend under the HUD: which colour is solid right now (shape + word, not just colour)
+      var s = r.s, red = s.solid === 'red';
+      var x = C.W / 2, y = C.TOP + 10;
+      ctx.save();
+      R.roundRect(ctx, x - 62, y - 8, 124, 16, 8);
+      ctx.fillStyle = 'rgba(5,7,16,0.75)'; ctx.fill();
+      if (s.flash > 0) { ctx.strokeStyle = 'rgba(255,255,255,' + (s.flash * 2).toFixed(3) + ')'; ctx.lineWidth = 2; ctx.stroke(); }
+      ctx.fillStyle = red ? BT.Bricks.RED_COLOR : BT.Bricks.BLUE_COLOR;
+      if (red) { ctx.beginPath(); ctx.arc(x - 48, y, 4, 0, TAU); ctx.fill(); }
+      else ctx.fillRect(x - 52, y - 4, 8, 8);
+      ctx.fillStyle = '#ffffff'; ctx.font = 'bold 10px ' + R.FONT; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.fillText((red ? 'RED' : 'BLUE') + ' is solid', x - 38, y + 0.5);
+      ctx.restore();
+    }
+  });
+
+  // ---------------- On the Beat: bricks fade in and out on a steady pulse ----------------
+  // params: pattern ('checker' | 'rows' | 'cols'). Two groups take turns being solid.
+  register('beat', {
+    init: function (g, r) {
+      var s = r.s, pat = r.p.pattern || 'checker';
+      s.t = 0; s.active = 0; s.ticks = 0;
+      for (var i = 0; i < g.bricks.length; i++) {
+        var b = g.bricks[i];
+        if (!b.grid || !b.breakable) continue;
+        b.beat = pat === 'rows' ? b.row % 2 : (pat === 'cols' ? b.col % 2 : (b.row + b.col) % 2);
+        g.makeGhostable(b);
+        if (b.beat !== 0) { b.solid = false; b.ghost = 1; }
+      }
+    },
+    period: function (g, r) { return r.p.period / Math.sqrt(g.preset.hazardScale); },
+    update: function (g, r, dt) {
+      var s = r.s, P2 = this.period(g, r), half = P2 / 2;
+      s.t += dt;
+      var ph = s.t % P2, active = ph < half ? 0 : 1;
+      if (active !== s.active) { s.active = active; s.ticks++; g.fx.sound('beat', active); }
+      var toFlip = half - (ph % half);
+      s.toFlip = toFlip; s.half = half;
+      var warn = toFlip < r.p.warn ? 1 - toFlip / r.p.warn : 0;
+      for (var i = 0; i < g.bricks.length; i++) {
+        var b = g.bricks[i];
+        if (b.beat == null || !b.alive) continue;
+        if (b.beat !== active) { b.wantGhost = true; b.warn = warn; }
+        else b.warn = 0;
+      }
+    },
+    render: function (ctx, g, r, layer, R) {
+      if (layer !== 'front') return;
+      // metronome under the HUD: a dot swings from side to side, ticking on each switch
+      var s = r.s, f = 1 - s.toFlip / s.half, x0 = C.W / 2 - 60, x1 = C.W / 2 + 60, y = C.TOP + 10;
+      var bx = s.active === 0 ? x0 + (x1 - x0) * f : x1 - (x1 - x0) * f;
+      ctx.save();
+      R.roundRect(ctx, x0 - 10, y - 7, x1 - x0 + 20, 14, 7);
+      ctx.fillStyle = 'rgba(5,7,16,0.7)'; ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 1; ctx.stroke();
+      ctx.fillStyle = 'rgba(255,255,255,0.5)';
+      ctx.fillRect(x0 - 1, y - 4, 2, 8); ctx.fillRect(x1 - 1, y - 4, 2, 8);
+      var near = s.toFlip < r.p.warn;
+      ctx.fillStyle = near ? '#ffe27a' : '#ffffff';
+      ctx.beginPath(); ctx.arc(bx, y, near ? 5 : 4, 0, TAU); ctx.fill();
+      ctx.restore();
+    }
+  });
+
+  // ---------------- Overgrown: vines regrow from their roots; kill the roots ----------------
+  // Grid chars: O root (armoured), V vine. Every few seconds each living root sprouts a new vine next to
+  // one of its vines (shown as a growing shoot first). Destroying a root withers all of its vines.
+  var NB4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  register('overgrown', {
+    init: function (g, r) {
+      var s = r.s, i, b;
+      s.timer = r.p.growEvery; s.sprouts = []; s.wither = []; s.witherT = 0; s.roots = [];
+      var cells = {};
+      for (i = 0; i < g.bricks.length; i++) {
+        b = g.bricks[i];
+        if (!b.grid) continue;
+        cells[b.row * 100 + b.col] = b;
+        if (b.type === 'root') { b.root = b; b.grown = 0; s.roots.push(b); }
+      }
+      // each vine belongs to the root it connects to (breadth-first through touching vines)
+      var queue = s.roots.slice();
+      while (queue.length) {
+        var cur = queue.shift();
+        for (var k = 0; k < 4; k++) {
+          var nb = cells[(cur.row + NB4[k][0]) * 100 + cur.col + NB4[k][1]];
+          if (nb && nb.type === 'vine' && !nb.root) { nb.root = cur.root; nb.parent = cur; queue.push(nb); }
+        }
+      }
+      for (i = 0; i < g.bricks.length; i++) { // stray vines: nearest root
+        b = g.bricks[i];
+        if (b.type !== 'vine' || b.root) continue;
+        var best = null, bd = 1e9;
+        for (var j = 0; j < s.roots.length; j++) {
+          var d = Math.abs(s.roots[j].row - b.row) + Math.abs(s.roots[j].col - b.col);
+          if (d < bd) { bd = d; best = s.roots[j]; }
+        }
+        b.root = best; b.parent = best;
+      }
+    },
+    cellFree: function (g, row, col) {
+      var gr = C.grid, x = col * gr.cellW + 1, y = gr.top + row * gr.cellH + 1;
+      for (var i = 0; i < g.bricks.length; i++) {
+        var b = g.bricks[i];
+        if (b.alive && b.x < x + gr.brickW && b.x + b.w > x && b.y < y + gr.brickH && b.y + b.h > y) return false;
+      }
+      return true;
+    },
+    grow: function (g, r, root) {
+      var s = r.s, p = r.p, cand = [], i, k;
+      for (i = 0; i < g.bricks.length; i++) {
+        var b = g.bricks[i];
+        if (!b.alive || b.root !== root) continue;
+        for (k = 0; k < 4; k++) {
+          var rr = b.row + NB4[k][0], cc = b.col + NB4[k][1];
+          if (rr < 0 || rr > p.maxRow || cc < 0 || cc >= C.grid.cols) continue;
+          var dup = false;
+          for (var q = 0; q < s.sprouts.length; q++) if (s.sprouts[q].row === rr && s.sprouts[q].col === cc) dup = true;
+          for (q = 0; q < cand.length && !dup; q++) if (cand[q].row === rr && cand[q].col === cc) dup = true;
+          if (!dup && this.cellFree(g, rr, cc)) cand.push({ row: rr, col: cc, parent: b });
+        }
+      }
+      if (!cand.length) return;
+      var c = cand[Math.floor(g.rng() * cand.length)];
+      s.sprouts.push({ row: c.row, col: c.col, parent: c.parent, root: root, t: p.sproutTime });
+      root.grown++;
+    },
+    update: function (g, r, dt) {
+      var s = r.s, p = r.p, gr = C.grid, i;
+      if (g.hazardsActive(1.5)) {
+        s.timer -= dt * g.preset.hazardScale;
+        if (s.timer <= 0) {
+          s.timer = p.growEvery;
+          for (i = 0; i < s.roots.length; i++) {
+            if (s.roots[i].alive && s.roots[i].grown < p.extraPerRoot) this.grow(g, r, s.roots[i]);
+          }
+        }
+      }
+      // shoots become vines, but never on top of a ball (they wait until it has gone)
+      var j = 0;
+      for (i = 0; i < s.sprouts.length; i++) {
+        var sp = s.sprouts[i];
+        if (!sp.root.alive) continue;
+        sp.t -= dt;
+        if (sp.t <= 0) {
+          var x = sp.col * gr.cellW + 1, y = gr.top + sp.row * gr.cellH + 1;
+          if (!g.ballNear(x, y, gr.brickW, gr.brickH, p.ballMargin) && this.cellFree(g, sp.row, sp.col)) {
+            var v = BT.Bricks.fromChar('V', x, y, gr.brickW, gr.brickH);
+            v.row = sp.row; v.col = sp.col; v.grid = true; v.root = sp.root; v.parent = sp.parent;
+            v.flash = 0.25; v.x = v.bx; v.y = v.by;
+            g.addBrick(v);
+            g.fx.sound('grow');
+            continue;
+          }
+          sp.t = 0;
+        }
+        s.sprouts[j++] = sp;
+      }
+      s.sprouts.length = j;
+      // withering
+      if (s.wither.length) {
+        s.witherT -= dt;
+        while (s.witherT <= 0 && s.wither.length) {
+          s.witherT += p.witherEvery;
+          var k = s.wither.shift();
+          if (k.alive) g.destroyBrick(k, 'wither');
+        }
+      }
+    },
+    onBrickDestroyed: function (g, r, b) {
+      if (b.type !== 'root') return;
+      var s = r.s, n = 0;
+      for (var i = 0; i < g.bricks.length; i++) {
+        var k = g.bricks[i];
+        if (k.alive && k.type === 'vine' && k.root === b) { k.withering = true; s.wither.push(k); n++; }
+      }
+      s.witherT = 0.15;
+      g.fx.sound('wither');
+      g.fx.text(b.x + b.w / 2, b.y - 6, n ? 'Withered!' : 'Root gone!', '#c9f27a');
+    },
+    render: function (ctx, g, r, layer) {
+      if (layer !== 'back') return;
+      var s = r.s, gr = C.grid, i;
+      ctx.save();
+      // stems: each vine to the brick it grew from
+      ctx.strokeStyle = 'rgba(80,150,70,0.55)'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+      ctx.beginPath();
+      for (i = 0; i < g.bricks.length; i++) {
+        var b = g.bricks[i];
+        if (!b.alive || b.type !== 'vine' || !b.parent || !b.parent.alive) continue;
+        ctx.moveTo(b.x + b.w / 2, b.y + b.h / 2); ctx.lineTo(b.parent.x + b.parent.w / 2, b.parent.y + b.parent.h / 2);
+      }
+      ctx.stroke();
+      // growing shoots: dashed cell outline + a sprout that gets bigger
+      for (i = 0; i < s.sprouts.length; i++) {
+        var sp = s.sprouts[i];
+        if (!sp.root.alive) continue;
+        var f = 1 - Math.max(0, sp.t) / r.p.sproutTime;
+        var x = sp.col * gr.cellW + 1, y = gr.top + sp.row * gr.cellH + 1, cx = x + gr.brickW / 2, cy = y + gr.brickH / 2;
+        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = 'rgba(120,230,120,' + (0.35 + 0.4 * f).toFixed(3) + ')'; ctx.lineWidth = 1.5;
+        ctx.strokeRect(x + 0.5, y + 0.5, gr.brickW - 1, gr.brickH - 1);
+        ctx.setLineDash([]);
+        ctx.strokeStyle = '#6fe07a'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(cx, cy + 6); ctx.lineTo(cx, cy + 6 - 10 * f); ctx.stroke();
+        ctx.fillStyle = '#6fe07a';
+        ctx.beginPath(); ctx.ellipse(cx - 3 * f, cy + 2 - 4 * f, 3 * f + 0.5, 1.6 * f + 0.4, -0.6, 0, TAU); ctx.fill();
+        ctx.beginPath(); ctx.ellipse(cx + 3 * f, cy + 1 - 4 * f, 3 * f + 0.5, 1.6 * f + 0.4, 0.6, 0, TAU); ctx.fill();
+      }
+      ctx.restore();
+    }
+  });
+
+  // ======================================================================================
+  // World 5 - Flip the rules
+  // ======================================================================================
+
+  // ---------------- Double Trouble: a second paddle at the top copies yours ----------------
+  // There is no top wall: a ball that gets past the top paddle is lost. The top paddle is wider than yours
+  // and leans a little towards a ball coming up at it, so the game feels bigger rather than twice as hard.
+  register('double', {
+    init: function (g, r) {
+      var s = r.s, p = r.p;
+      g.topOpen = true;
+      s.xp = g.addXPaddle({ y: C.TOP + p.gap, w: g.paddle.w * p.widthMult, x: g.paddle.x, face: 1, counts: true, owner: r, kind: 'mirror', color: '#ffb347' });
+      s.assist = 0; s.topNet = !!g.preset.net; s.netFlash = 0;
+    },
+    update: function (g, r, dt) {
+      var s = r.s, p = r.p, q = s.xp, pd = g.paddle;
+      if (s.netFlash > 0) s.netFlash -= dt;
+      q.w = pd.w * p.widthMult;
+      // lean towards the ball that will arrive first
+      var want = 0, bestT = 1e9, hitY = q.y + q.h / 2;
+      for (var i = 0; i < g.balls.length; i++) {
+        var b = g.balls[i];
+        if (b.stuck || b.vy >= 0 || b.y < hitY || b.y > 380) continue;
+        var t = (b.y - hitY) / -b.vy;
+        if (t >= bestT) continue;
+        bestT = t;
+        var lx = g.wrapX ? g.wrapPos(b.x + b.vx * t) : P.predictLandingX(b.x, -b.y, b.vx, -b.vy, -(hitY + b.r), b.r, C.W - b.r);
+        var d = g.wrapX ? g.wrapDelta(lx - pd.x) : lx - pd.x;
+        want = P.clamp(d, -p.assist, p.assist);
+      }
+      s.assist += (want - s.assist) * Math.min(1, p.assistRate * dt);
+      var nx = pd.x + s.assist, ox = q.x;
+      if (g.wrapX) nx = g.wrapPos(nx);
+      else nx = P.clamp(nx, q.w / 2, C.W - q.w / 2);
+      q.vx = (g.wrapX ? g.wrapDelta(nx - ox) : nx - ox) / dt;
+      q.x = nx;
+      if (q.squash > 0) q.squash -= dt;
+      if (q.hitFlash > 0) q.hitFlash -= dt;
+    },
+    onBallStep: function (g, r, ball) {
+      var s = r.s;
+      if (!s.topNet || ball.vy >= 0 || ball.y - ball.r > C.TOP + 3 || g.state === 'clearing') return;
+      ball.y = C.TOP + 3 + ball.r; ball.vy = Math.abs(ball.vy);
+      s.topNet = false; s.netFlash = 0.6;
+      g.fx.sound('net'); g.fx.text(ball.x, C.TOP + 26, 'Saved!', '#7cf5ff');
+      g.fx.burst(ball.x, C.TOP + 3, '#7cf5ff', 14, 'spark');
+    },
+    onLifeLost: function (g, r) { r.s.topNet = !!g.preset.net; },
+    render: function (ctx, g, r, layer) {
+      if (layer !== 'back') return;
+      var s = r.s;
+      ctx.save();
+      // the open top: a dark band with arrows pointing out, so it reads as a hole like the bottom
+      var grd = ctx.createLinearGradient(0, C.TOP, 0, C.TOP + 18);
+      grd.addColorStop(0, 'rgba(255,90,100,0.28)'); grd.addColorStop(1, 'rgba(255,90,100,0)');
+      ctx.fillStyle = grd; ctx.fillRect(0, C.TOP, C.W, 18);
+      ctx.strokeStyle = 'rgba(255,120,130,0.5)'; ctx.lineWidth = 1.5;
+      for (var x = 30; x < C.W; x += 60) {
+        ctx.beginPath(); ctx.moveTo(x - 5, C.TOP + 9); ctx.lineTo(x, C.TOP + 4); ctx.lineTo(x + 5, C.TOP + 9); ctx.stroke();
+      }
+      if (s.topNet || s.netFlash > 0) {
+        var na = s.topNet ? 0.45 + 0.2 * Math.sin(g.t * 3) : s.netFlash;
+        ctx.fillStyle = 'rgba(124,245,255,' + na.toFixed(3) + ')';
+        ctx.fillRect(0, C.TOP + 1, C.W, 2);
+      }
+      ctx.restore();
+    }
+  });
+
+  // ---------------- Wraparound: no side walls; ball and paddle wrap across the edges ----------------
+  register('wrap', {
+    init: function (g) { g.wrapX = true; },
+    render: function (ctx, g, r, layer) {
+      if (layer !== 'back') return;
+      ctx.save();
+      // open edges: dashed glowing lines with arrows pointing through to the other side
+      ctx.strokeStyle = 'rgba(120,255,220,0.45)'; ctx.lineWidth = 2;
+      ctx.setLineDash([6, 8]); ctx.lineDashOffset = -g.t * 18;
+      ctx.beginPath(); ctx.moveTo(1, C.TOP); ctx.lineTo(1, C.H); ctx.moveTo(C.W - 1, C.TOP); ctx.lineTo(C.W - 1, C.H); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(120,255,220,0.35)';
+      for (var y = 150; y < C.H - 60; y += 130) {
+        ctx.beginPath(); ctx.moveTo(4, y - 7); ctx.lineTo(4, y + 7); ctx.lineTo(-4, y); ctx.closePath(); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(C.W - 4, y - 7); ctx.lineTo(C.W - 4, y + 7); ctx.lineTo(C.W + 4, y); ctx.closePath(); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(10, y - 6); ctx.lineTo(10, y + 6); ctx.lineTo(4, y); ctx.closePath(); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(C.W - 10, y - 6); ctx.lineTo(C.W - 10, y + 6); ctx.lineTo(C.W - 4, y); ctx.closePath(); ctx.fill();
+      }
+      ctx.restore();
+    }
+  });
+
+  // ---------------- Brickfall: brick shapes drop from the top and stack ----------------
+  // Shapes fall as one piece until any part lands, then every brick settles straight down its column, so the
+  // stack never has holes or overhangs that could trap the ball. Nothing moves into a ball (it waits instead).
+  // Each piece is shown at the top, with a shadow down its columns, before it drops.
+  var SHAPES = {
+    I: [[0, 0], [0, 1], [0, 2], [0, 3]], O: [[0, 0], [0, 1], [1, 0], [1, 1]], T: [[0, 0], [0, 1], [0, 2], [1, 1]],
+    L: [[0, 0], [1, 0], [2, 0], [2, 1]], J: [[0, 1], [1, 1], [2, 1], [2, 0]], S: [[0, 1], [0, 2], [1, 0], [1, 1]],
+    Z: [[0, 0], [0, 1], [1, 1], [1, 2]]
+  };
+  var SHAPE_KEYS = ['I', 'O', 'T', 'L', 'J', 'S', 'Z'];
+  var SHAPE_COLORS = { I: '#4fd8ff', O: '#ffd35a', T: '#a46bff', L: '#ff9f43', J: '#5b8cff', S: '#2ee0a4', Z: '#ff5a64' };
+  register('brickfall', {
+    init: function (g, r) {
+      var s = r.s, p = r.p, gr = C.grid;
+      s.floorY = gr.top + p.floorRow * gr.cellH;
+      s.overY = gr.top + p.overflowRow * gr.cellH;
+      s.left = p.pieces; s.timer = p.grace + p.telegraph; s.pieces = []; s.next = null; s.danger = 0;
+      s.cols = []; for (var c = 0; c < gr.cols; c++) s.cols.push([]);
+      for (var i = 0; i < g.bricks.length; i++) { // the starting stack comes from the level grid
+        var b = g.bricks[i];
+        if (!b.grid || !b.breakable) continue;
+        this.adopt(r, b, b.col, gr.top + b.row * gr.cellH, null);
+      }
+      this.pickNext(g, r);
+    },
+    adopt: function (r, b, col, sy, piece) {
+      b.owner = r; b.fc = col; b.sy = sy; b.piece = piece; b.bf = true;
+      b.bx = col * C.grid.cellW + 1; b.by = sy + 1;
+    },
+    pickNext: function (g, r) {
+      var key = SHAPE_KEYS[Math.floor(g.rng() * SHAPE_KEYS.length)], rot = Math.floor(g.rng() * 4);
+      var cells = SHAPES[key].map(function (q) { return [q[0], q[1]]; });
+      for (var k = 0; k < rot; k++) cells = cells.map(function (q) { return [q[1], -q[0]]; });
+      var mr = 1e9, mc = 1e9, Mr = -1e9, Mc = -1e9;
+      cells.forEach(function (q) { mr = Math.min(mr, q[0]); mc = Math.min(mc, q[1]); });
+      cells = cells.map(function (q) { return [q[0] - mr, q[1] - mc]; });
+      cells.forEach(function (q) { Mr = Math.max(Mr, q[0]); Mc = Math.max(Mc, q[1]); });
+      // prefer the lowest columns so the stack stays even
+      var w = Mc + 1, best = [], bestH = 1e9;
+      for (var c0 = 0; c0 + w <= C.grid.cols; c0++) {
+        var h = 0;
+        for (var c = c0; c < c0 + w; c++) h = Math.max(h, this.colHeight(r, c));
+        if (h < bestH - 0.5) { bestH = h; best = [c0]; } else if (Math.abs(h - bestH) <= 0.5 || g.rng() < 0.35) best.push(c0);
+      }
+      var col = best[Math.floor(g.rng() * best.length)];
+      r.s.next = { key: key, cells: cells, rows: Mr + 1, col: col, color: SHAPE_COLORS[key] };
+    },
+    colHeight: function (r, c) { // stacked bricks in a column
+      var n = 0, list = r.s.cols[c];
+      for (var i = 0; i < list.length; i++) if (!list[i].piece) n++;
+      return n;
+    },
+    spawn: function (g, r) {
+      var s = r.s, nx = s.next, gr = C.grid;
+      var piece = { bricks: [], color: nx.color };
+      for (var i = 0; i < nx.cells.length; i++) {
+        var q = nx.cells[i];
+        var b = BT.Bricks.make('normal', 0, 0, gr.brickW, gr.brickH);
+        b.color = nx.color;
+        this.adopt(r, b, nx.col + q[1], C.TOP - (nx.rows - q[0]) * gr.cellH, piece);
+        b.x = b.bx; b.y = b.by;
+        g.addBrick(b);
+        piece.bricks.push(b);
+      }
+      s.pieces.push(piece);
+      s.left--;
+      g.fx.sound('drop');
+      if (s.left > 0) this.pickNext(g, r); else s.next = null;
+    },
+    rebuildCols: function (g, r) {
+      var cols = r.s.cols, i;
+      for (i = 0; i < cols.length; i++) cols[i].length = 0;
+      for (i = 0; i < g.bricks.length; i++) {
+        var b = g.bricks[i];
+        if (b.alive && b.bf && b.owner === r) cols[b.fc].push(b);
+      }
+      for (i = 0; i < cols.length; i++) cols[i].sort(function (a, b) { return b.sy - a.sy; }); // bottom first
+    },
+    // top of the nearest brick below b in its column that is not part of the same piece (or the floor)
+    supportBelow: function (r, b) {
+      var list = r.s.cols[b.fc], best = r.s.floorY;
+      for (var i = 0; i < list.length; i++) {
+        var o = list[i];
+        if (o === b || (b.piece && o.piece === b.piece)) continue;
+        if (o.sy >= b.sy + 0.01 && o.sy < best) best = o.sy;
+      }
+      return best;
+    },
+    update: function (g, r, dt) {
+      var s = r.s, p = r.p, gr = C.grid, ch = gr.cellH, i, j, b;
+      var sc = g.preset.hazardScale;
+      this.rebuildCols(g, r);
+      // spawning (only while the ball is in play)
+      if (s.left > 0 && g.hazardsActive(0)) {
+        s.timer -= dt * sc;
+        if (g.requiredLeft() === 0 && s.timer > p.telegraph) s.timer = p.telegraph; // nothing to hit: hurry up
+        if (s.timer <= 0) { this.spawn(g, r); s.timer = p.every; this.rebuildCols(g, r); }
+      }
+      // falling pieces move as one until any brick lands
+      var fall = p.fallSpeed * (0.7 + 0.3 * sc) * dt;
+      for (i = 0; i < s.pieces.length; i++) {
+        var pc = s.pieces[i], move = fall, any = false;
+        for (j = 0; j < pc.bricks.length; j++) {
+          b = pc.bricks[j];
+          if (!b.alive) continue;
+          any = true;
+          move = Math.min(move, this.supportBelow(r, b) - (b.sy + ch));
+          if (g.ballNear(b.bx, b.by, b.w, b.h + fall + p.ballMargin, 0)) move = Math.min(move, 0); // wait for the ball
+        }
+        if (!any) { pc.done = true; continue; }
+        if (move > 0) for (j = 0; j < pc.bricks.length; j++) { b = pc.bricks[j]; b.sy += move; b.by = b.sy + 1; }
+        var landed = false;
+        for (j = 0; j < pc.bricks.length && !landed; j++) {
+          b = pc.bricks[j];
+          if (b.alive && this.supportBelow(r, b) - (b.sy + ch) <= 0.01) landed = true;
+        }
+        if (landed) {
+          pc.done = true;
+          for (j = 0; j < pc.bricks.length; j++) pc.bricks[j].piece = null;
+          g.fx.sound('land');
+        }
+      }
+      j = 0;
+      for (i = 0; i < s.pieces.length; i++) if (!s.pieces[i].done) s.pieces[j++] = s.pieces[i];
+      s.pieces.length = j;
+      // stacked bricks settle down their column (bottom first) so there are never holes
+      this.rebuildCols(g, r);
+      var settle = p.settleSpeed * dt, top = s.floorY;
+      for (var c = 0; c < s.cols.length; c++) {
+        var list = s.cols[c], support = s.floorY;
+        for (i = 0; i < list.length; i++) {
+          b = list[i];
+          if (!b.piece) {
+            var rest = support - ch;
+            if (b.sy < rest - 0.01) {
+              var mv = Math.min(settle, rest - b.sy);
+              if (!g.ballNear(b.bx, b.by, b.w, b.h + mv + p.ballMargin, 0)) { b.sy += mv; b.by = b.sy + 1; }
+            } else if (b.sy > rest) { b.sy = rest; b.by = b.sy + 1; }
+            if (b.sy >= rest - 0.01 && b.sy < top) top = b.sy;
+          }
+          support = b.sy;
+        }
+      }
+      s.top = top;
+      s.danger = Math.max(0, Math.min(1, 1 - (top - s.overY) / (4 * ch)));
+      if (top < s.overY - 0.5 && g.state === 'play') {
+        g.fx.text(C.W / 2, s.overY + 30, 'Too high!', '#ff8080');
+        g.loseLife('crushed');
+      }
+    },
+    holdClear: function (g, r) { return r.s.left > 0; },
+    onLifeLost: function (g, r) { // knock the top off the stack
+      var s = r.s, lim = s.overY + r.p.clearRowsOnLife * C.grid.cellH;
+      for (var i = 0; i < g.bricks.length; i++) {
+        var b = g.bricks[i];
+        if (b.alive && b.bf && b.owner === r && !b.piece && b.sy < lim) {
+          b.alive = false;
+          g.fx.burst(b.x + b.w / 2, b.y + b.h / 2, b.color, 4, 'chip');
+        }
+      }
+      s.timer = Math.max(s.timer, r.p.telegraph + 1);
+    },
+    render: function (ctx, g, r, layer, R) {
+      var s = r.s, p = r.p, gr = C.grid, i;
+      if (layer === 'back') {
+        ctx.save();
+        // glass floor the stack rests on (the ball passes through it)
+        ctx.strokeStyle = 'rgba(160,220,255,0.45)'; ctx.lineWidth = 2; ctx.setLineDash([12, 6]);
+        ctx.beginPath(); ctx.moveTo(0, s.floorY + 1); ctx.lineTo(C.W, s.floorY + 1); ctx.stroke();
+        // too-high line
+        var a = 0.25 + 0.6 * s.danger;
+        if (s.danger > 0.6) a *= 0.75 + 0.25 * Math.sin(g.t * 12);
+        ctx.strokeStyle = 'rgba(255,80,90,' + a.toFixed(3) + ')'; ctx.setLineDash([10, 8]); ctx.lineDashOffset = -g.t * 20;
+        ctx.beginPath(); ctx.moveTo(0, s.overY); ctx.lineTo(C.W, s.overY); ctx.stroke();
+        ctx.setLineDash([]);
+        // next piece: outline at the top and a shadow down its columns
+        var nx = s.next;
+        if (nx && s.left > 0) {
+          var soon = g.state === 'play' && s.timer < p.telegraph;
+          var blink = soon ? 0.55 + 0.45 * Math.sin(g.t * 14) : 0.35;
+          for (i = 0; i < nx.cells.length; i++) {
+            var q = nx.cells[i], x = (nx.col + q[1]) * gr.cellW + 1;
+            if (soon) {
+              ctx.fillStyle = 'rgba(255,255,255,0.05)';
+              ctx.fillRect(x, C.TOP, gr.brickW, s.floorY - C.TOP);
+            }
+            ctx.globalAlpha = blink;
+            R.roundRect(ctx, x, C.TOP + 3 + q[0] * 8, gr.brickW, 7, 2);
+            ctx.fillStyle = nx.color; ctx.fill();
+            ctx.globalAlpha = 1;
+          }
+        }
+        ctx.restore();
+        return;
+      }
+      // front: pieces left
+      ctx.save();
+      ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.font = 'bold 11px ' + R.FONT; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+      ctx.fillText(s.left > 0 ? s.left + (s.left === 1 ? ' piece to come' : ' pieces to come') : 'Last one!', C.W - 6, s.floorY + 12);
+      ctx.restore();
+    }
+  });
+
+  // ---------------- Twelve Bounces: a puzzle with a fixed number of paddle bounces ----------------
+  // Running out (or missing the ball) restarts the puzzle at once without costing a life.
+  register('bounces', {
+    init: function (g, r) { r.s.left = r.p.count; r.s.fail = 0; r.s.pop = 0; },
+    onPaddleHit: function (g, r, ball, xp) {
+      if (xp) return;
+      var s = r.s;
+      s.left = Math.max(0, s.left - 1); s.pop = 0.25;
+      if (s.left === 0) {
+        g.paddle.off = true;
+        g.fx.text(g.paddle.x, g.paddle.y - 24, 'Last bounce!', '#ffd35a');
+      }
+    },
+    beforeLifeLost: function (g, r, reason) {
+      var s = r.s;
+      if (s.fail <= 0) {
+        s.fail = r.p.failDelay;
+        g.fx.sound('lose');
+        g.fx.text(C.W / 2, 470, s.left === 0 ? 'Out of bounces!' : 'Missed!', '#ffb0b0');
+      }
+      return true; // no life lost: the puzzle restarts
+    },
+    update: function (g, r, dt) {
+      var s = r.s;
+      if (s.pop > 0) s.pop -= dt;
+      if (s.fail <= 0 || g.state !== 'play') return;
+      if (g.blasts.length) return; // let a chain reaction finish: it might still clear the level
+      s.fail -= dt;
+      if (s.fail <= 0) {
+        g.retry();
+        g.fx.sound('retry');
+        g.fx.text(C.W / 2, 470, 'Try again!', '#ffffff');
+      }
+    },
+    render: function (ctx, g, r, layer, R) {
+      if (layer !== 'back') return;
+      var s = r.s, low = s.left <= 3;
+      var y = 478, sc = 1 + (s.pop > 0 ? s.pop * 1.2 : 0);
+      ctx.save();
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      var a = low ? 0.75 + 0.25 * Math.sin(g.t * 8) : 0.7;
+      ctx.fillStyle = low ? 'rgba(255,110,120,' + a.toFixed(3) + ')' : 'rgba(255,255,255,' + a + ')';
+      ctx.font = '900 ' + Math.round(58 * sc) + 'px ' + R.FONT;
+      ctx.fillText(String(s.left), C.W / 2, y);
+      ctx.font = 'bold 11px ' + R.FONT; ctx.fillStyle = 'rgba(255,255,255,0.6)';
+      ctx.fillText(s.left === 1 ? 'BOUNCE LEFT' : 'BOUNCES LEFT', C.W / 2, y + 38);
+      // one pip per bounce, used ones hollow
+      var n = r.p.count, w = 12;
+      for (var i = 0; i < n; i++) {
+        var x = C.W / 2 - (n - 1) * w / 2 + i * w;
+        ctx.beginPath(); ctx.arc(x, y + 54, 3.6, 0, TAU);
+        if (i < s.left) { ctx.fillStyle = low ? '#ff6e78' : '#ffd35a'; ctx.fill(); }
+        else { ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.lineWidth = 1; ctx.stroke(); }
+      }
+      if (g.attempts > 0) {
+        ctx.fillStyle = 'rgba(255,255,255,0.45)'; ctx.font = '11px ' + R.FONT;
+        ctx.fillText('Try ' + (g.attempts + 1), C.W / 2, y - 40);
+      }
+      ctx.restore();
+    }
+  });
+
   BT.Rules = { registry: registry, register: register, distToSegment: distToSegment, TAU: TAU };
 })(typeof window !== 'undefined' ? (window.BT = window.BT || {}) : (globalThis.BT = globalThis.BT || {}));
 
@@ -1404,6 +2177,293 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
       ctx.restore();
     }
   });
+
+  // ======================= The Lighthouse =======================
+  // A lamp in the middle with rings of bricks round it. A rotating beam sweeps the arena and bricks are only
+  // solid while they are inside it. Hit the lamp; every hit spins the beam faster.
+  // params: cx, cy, rings [{ radius, n, ch, size }]
+  register('lighthouse', {
+    boss: true, bossName: 'The Lighthouse',
+    init: function (g, r) {
+      var s = r.s, p = r.p;
+      s.cx = p.cx || C.W / 2; s.cy = p.cy || 230;
+      s.hp = s.maxHp = Math.max(3, Math.round(p.hp * g.preset.bossHpScale));
+      s.angle = p.startAngle != null ? p.startAngle : 0; s.t = 0; s.flash = 0; s.hitCd = 0; s.defeated = false;
+      s.ring = [];
+      var rings = p.rings || [];
+      for (var ri = 0; ri < rings.length; ri++) {
+        var rg = rings[ri], sz = rg.size || 18;
+        for (var i = 0; i < rg.n; i++) {
+          var a = (i + (rg.offset || 0)) / rg.n * TAU;
+          var ch = rg.ch[i % rg.ch.length];
+          var b = BT.Bricks.fromChar(ch, s.cx + Math.cos(a) * rg.radius - sz / 2, s.cy + Math.sin(a) * rg.radius - 7, sz, 14);
+          if (!b) continue;
+          b.owner = r; b.required = false; b.ang = a; b.angHalf = Math.atan2(sz * 0.55, rg.radius);
+          g.addBrick(b);
+          g.makeGhostable(b);
+          s.ring.push(b);
+        }
+      }
+      this.light(g, r, true);
+    },
+    beamCount: function (r) { return r.p.beams; },
+    // how far (radians) angle a is from the nearest beam centre
+    beamDist: function (r, a) {
+      var n = r.p.beams, best = 1e9;
+      for (var k = 0; k < n; k++) {
+        var d = a - (r.s.angle + k * TAU / n);
+        d = ((d % TAU) + TAU * 1.5) % TAU - TAU / 2;
+        if (Math.abs(d) < best) best = Math.abs(d);
+      }
+      return best;
+    },
+    light: function (g, r, first) {
+      var half = r.p.beamHalfDeg * P.DEG;
+      for (var i = 0; i < r.s.ring.length; i++) {
+        var b = r.s.ring[i];
+        if (!b.alive) continue;
+        var d = this.beamDist(r, b.ang);
+        b.lit = Math.max(0, Math.min(1, 1 - (d - half) / (b.angHalf * 2 + 0.25)));
+        if (d > half + b.angHalf) {
+          b.wantGhost = true;
+          if (first) { b.solid = false; b.ghost = 1; }
+          // about to be swept into the light: show it
+          var ahead = ((b.ang - r.s.angle) % (TAU / r.p.beams) + TAU) % (TAU / r.p.beams);
+          b.warn = ahead > half + b.angHalf && ahead < half + b.angHalf + 0.35 ? 0.7 : 0;
+        } else b.warn = 0;
+      }
+    },
+    update: function (g, r, dt) {
+      var s = r.s, p = r.p;
+      s.t += dt;
+      if (s.flash > 0) s.flash -= dt;
+      if (s.hitCd > 0) s.hitCd -= dt;
+      if (s.defeated) return;
+      var lost = s.maxHp - s.hp;
+      var spin = (p.spin + p.spinPerHit * lost) * (0.6 + 0.4 * g.preset.hazardScale);
+      s.angle += spin * dt * (g.state === 'play' ? 1 : 0.4);
+      this.light(g, r, false);
+    },
+    onBallStep: function (g, r, ball) {
+      var s = r.s;
+      if (s.defeated) return;
+      if (P.circleCircle(ball.x, ball.y, ball.r, s.cx, s.cy, r.p.bodyRadius) > 0) {
+        ball.x += HIT.nx * HIT.depth; ball.y += HIT.ny * HIT.depth;
+        P.reflect(ball, HIT.nx, HIT.ny);
+        this.hitLamp(g, r);
+      }
+    },
+    hitLamp: function (g, r) {
+      var s = r.s;
+      if (s.hitCd > 0) { g.fx.sound('steel'); return; }
+      s.hitCd = r.p.invuln; // a short flash after each hit, so a ball rattling round the lamp can't melt it
+      s.hp--; s.flash = 0.25;
+      g.sinceHit = 0;
+      g.score += C.score.bossHit;
+      g.fx.sound('bosshit');
+      g.fx.shake(3); g.shakeAmt = Math.max(g.shakeAmt, 3);
+      g.fx.burst(s.cx, s.cy, '#fff2b0', 12, 'spark');
+      if (s.hp === Math.ceil(s.maxHp / 2)) g.fx.text(s.cx, s.cy - 40, 'Faster!', '#ffe27a');
+      if (s.hp <= 0) {
+        bossDefeated(g, r, s.cx, s.cy);
+        shatterOwned(g, r);
+      }
+    },
+    onLaser: function (g, r, L) {
+      var s = r.s;
+      if (s.defeated) return false;
+      var dx = L.x - s.cx, dy = L.y - s.cy;
+      if (dx * dx + dy * dy < r.p.bodyRadius * r.p.bodyRadius) { this.hitLamp(g, r); return true; }
+      return false;
+    },
+    render: function (ctx, g, r, layer) {
+      var s = r.s, p = r.p, R0 = p.bodyRadius, k;
+      if (s.defeated) return;
+      if (layer === 'back') {
+        ctx.save();
+        // beams: soft cones from the lamp
+        var half = p.beamHalfDeg * P.DEG, len = p.beamLength;
+        for (k = 0; k < p.beams; k++) {
+          var a = s.angle + k * TAU / p.beams;
+          var grd = ctx.createRadialGradient(s.cx, s.cy, R0, s.cx, s.cy, len);
+          grd.addColorStop(0, 'rgba(255,240,170,0.42)'); grd.addColorStop(0.5, 'rgba(255,240,170,0.16)'); grd.addColorStop(1, 'rgba(255,240,170,0)');
+          ctx.fillStyle = grd;
+          ctx.beginPath(); ctx.moveTo(s.cx, s.cy); ctx.arc(s.cx, s.cy, len, a - half, a + half); ctx.closePath(); ctx.fill();
+          ctx.strokeStyle = 'rgba(255,240,170,0.35)'; ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(s.cx, s.cy); ctx.lineTo(s.cx + Math.cos(a - half) * len, s.cy + Math.sin(a - half) * len);
+          ctx.moveTo(s.cx, s.cy); ctx.lineTo(s.cx + Math.cos(a + half) * len, s.cy + Math.sin(a + half) * len); ctx.stroke();
+        }
+        ctx.restore();
+        return;
+      }
+      // front: the lamp (drawn over the ball trail so it always reads)
+      ctx.save();
+      ctx.fillStyle = '#2b2f45';
+      ctx.beginPath(); ctx.arc(s.cx, s.cy, R0 + 4, 0, TAU); ctx.fill();
+      if (s.hitCd > 0 && Math.floor(s.t * 16) % 2 === 0) ctx.globalAlpha = 0.45;
+      var lg = ctx.createRadialGradient(s.cx, s.cy, 2, s.cx, s.cy, R0);
+      lg.addColorStop(0, '#ffffff'); lg.addColorStop(0.5, s.flash > 0 ? '#ffffff' : '#fff2b0'); lg.addColorStop(1, '#e8b830');
+      ctx.fillStyle = lg;
+      ctx.beginPath(); ctx.arc(s.cx, s.cy, R0, 0, TAU); ctx.fill();
+      // shutters that turn with the beam
+      ctx.fillStyle = 'rgba(40,44,70,0.85)';
+      for (k = 0; k < p.beams; k++) {
+        var sa = s.angle + (k + 0.5) * TAU / p.beams;
+        ctx.beginPath(); ctx.moveTo(s.cx, s.cy); ctx.arc(s.cx, s.cy, R0, sa - 0.55, sa + 0.55); ctx.closePath(); ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = '#ffe27a'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(s.cx, s.cy, R0 + 4, 0, TAU); ctx.stroke();
+      // hit pips
+      ctx.fillStyle = '#ffe27a';
+      for (k = 0; k < s.hp; k++) { ctx.beginPath(); ctx.arc(s.cx - (s.hp - 1) * 3.5 + k * 7, s.cy + R0 + 11, 2, 0, TAU); ctx.fill(); }
+      ctx.restore();
+    }
+  });
+
+  // ======================= The Rival =======================
+  // A computer paddle at the top guards its core behind its own bricks and bats your ball back. It is quick but
+  // not perfect: it reacts a moment late, aims a little off, and gets dizzy when its core is hit.
+  // The rival's paddle is one-way: a ball coming back down from behind it passes straight through.
+  register('rival', {
+    boss: true, bossName: 'The Rival',
+    init: function (g, r) {
+      var s = r.s, p = r.p;
+      var core = BT.Bricks.make('core', (p.coreX || C.W / 2) - 14, (p.coreY || 76) - 14, 28, 28);
+      core.hp = core.maxHp = Math.max(2, Math.round(p.coreHp * g.preset.bossHpScale));
+      core.color = '#ff6b6b'; core.owner = r; core.required = false; core.rivalCore = true;
+      g.addBrick(core);
+      s.core = core;
+      s.hp = s.maxHp = core.hp; s.defeated = false;
+      s.xp = g.addXPaddle({ x: C.W / 2, y: p.y, w: p.paddleW, face: 1, counts: false, owner: r, kind: 'rival', color: '#ff6b6b' });
+      s.v = 0; s.react = 0; s.err = 0; s.dizzy = 0; s.track = null; s.hits = 0; s.misses = 0; s.mood = 0; s.t = 0;
+      s.lookX = C.W / 2; s.lookY = 400;
+    },
+    maxSpeed: function (g, r) {
+      var s = r.s, f = 0.62 + 0.38 * g.preset.hazardScale;
+      f *= 1 + 0.25 * (1 - s.hp / s.maxHp); // tries harder when hurt
+      return r.p.speed * f;
+    },
+    update: function (g, r, dt) {
+      var s = r.s, p = r.p, q = s.xp;
+      s.t += dt;
+      if (q.squash > 0) q.squash -= dt;
+      if (q.hitFlash > 0) q.hitFlash -= dt;
+      if (s.mood > 0) s.mood -= dt;
+      if (s.defeated) { q.off = true; return; }
+      s.hp = s.core.alive ? s.core.hp : 0;
+      // which ball is coming at it first?
+      var hitY = q.y + q.h / 2, best = null, bestT = 1e9, i;
+      for (i = 0; i < g.balls.length; i++) {
+        var b = g.balls[i];
+        if (b.stuck || b.vy >= 0 || b.y < hitY || b.y > hitY + p.sight) continue; // only reacts once it is close
+        var t = (b.y - hitY) / -b.vy;
+        if (t < bestT) { bestT = t; best = b; }
+      }
+      if (s.track) {
+        var tb = s.track;
+        if (tb.dead || tb.vy >= 0) s.track = null;
+        else if (tb.y < q.y - q.h / 2 - tb.r) { // it got past
+          s.misses++; s.track = null; s.mood = -1.2;
+          if (g.rng() < p.tauntChance + 0.3) g.fx.text(q.x, q.y + 20, MISS_LINES[(s.misses + s.hits) % MISS_LINES.length], '#ffb0b0');
+        }
+      }
+      if (best && !s.track) { // a new shot: think for a moment, and misjudge it a little
+        s.track = best;
+        s.react = p.react * (0.7 + 0.6 * g.rng()) / Math.sqrt(g.preset.hazardScale);
+        s.err = (g.rng() * 2 - 1) * p.aimErr;
+      }
+      var target;
+      if (s.dizzy > 0) {
+        s.dizzy -= dt;
+        target = q.x + Math.sin(s.t * 7) * 30;
+      } else if (best) {
+        s.lookX = best.x; s.lookY = best.y;
+        if (s.react > 0) { s.react -= dt; target = q.x; }
+        else {
+          var lx = P.predictLandingX(best.x, -best.y, best.vx, -best.vy, -(hitY + best.r), best.r, C.W - best.r);
+          target = lx + s.err;
+        }
+      } else { // nothing to do: drift back towards the middle, watching the ball
+        target = C.W / 2 + (g.paddle.x - C.W / 2) * 0.3;
+        if (g.balls.length) { s.lookX = g.balls[0].x; s.lookY = g.balls[0].y; }
+      }
+      var maxV = this.maxSpeed(g, r) * (s.dizzy > 0 ? 0.3 : 1);
+      var wantV = P.clamp((target - q.x) * 7, -maxV, maxV);
+      s.v += P.clamp(wantV - s.v, -p.accel * dt, p.accel * dt);
+      var nx = P.clamp(q.x + s.v * dt, q.w / 2, C.W - q.w / 2);
+      if (nx !== q.x + s.v * dt) s.v = 0;
+      q.vx = (nx - q.x) / dt;
+      q.x = nx;
+      // cheeky aim: tries to send the ball away from your paddle
+      q.aim = (g.paddle.x < C.W / 2 ? 1 : -1) * p.cheekyAim * P.DEG;
+    },
+    onPaddleHit: function (g, r, ball, xp) {
+      if (!xp || xp !== r.s.xp) return;
+      var s = r.s;
+      s.hits++; s.track = null; s.mood = 1.2;
+      s.react = 0;
+      if (g.rng() < r.p.tauntChance) g.fx.text(xp.x, xp.y + 22, HIT_LINES[s.hits % HIT_LINES.length], '#ffd0d0');
+    },
+    onBrickHit: function (g, r, b) {
+      if (b !== r.s.core) return false;
+      g.fx.sound('bosshit');
+      g.fx.shake(3); g.shakeAmt = Math.max(g.shakeAmt, 3);
+      g.score += C.score.bossHit;
+      r.s.dizzy = r.p.dizzy; r.s.mood = -2;
+      if (b.hp > 1) g.fx.text(r.s.xp.x, r.s.xp.y + 22, 'Oof!', '#ffe27a');
+      return false;
+    },
+    onBrickDestroyed: function (g, r, b) {
+      if (b !== r.s.core || r.s.defeated) return;
+      bossDefeated(g, r, b.x + b.w / 2, b.y + b.h / 2);
+      r.s.xp.off = true;
+      for (var i = 0; i < g.bricks.length; i++) { // its wall falls with it
+        var k = g.bricks[i];
+        if (k.alive && k.grid && k.breakable) g.destroyBrick(k, 'boss');
+      }
+    },
+    render: function (ctx, g, r, layer) {
+      var s = r.s, q = s.xp;
+      if (layer === 'back') {
+        if (!s.core.alive) return;
+        ctx.save();
+        var pulse = 0.5 + 0.5 * Math.sin(g.t * 4);
+        var cx = s.core.x + 14, cy = s.core.y + 14;
+        var grd = ctx.createRadialGradient(cx, cy, 4, cx, cy, 40);
+        grd.addColorStop(0, 'rgba(255,107,107,' + (0.35 + 0.2 * pulse).toFixed(3) + ')'); grd.addColorStop(1, 'rgba(255,107,107,0)');
+        ctx.fillStyle = grd; ctx.beginPath(); ctx.arc(cx, cy, 40, 0, TAU); ctx.fill();
+        ctx.restore();
+        return;
+      }
+      if (s.defeated) return;
+      // face on the rival's paddle: eyes follow the ball; brows show its mood
+      ctx.save();
+      var ex = q.x, ey = q.y - 1, dx = s.lookX - ex, dy = s.lookY - ey, d = Math.sqrt(dx * dx + dy * dy) || 1;
+      for (var k = -1; k <= 1; k += 2) {
+        var x = ex + k * 9;
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath(); ctx.arc(x, ey, 4.2, 0, TAU); ctx.fill();
+        ctx.fillStyle = '#2a0f1f';
+        if (s.dizzy > 0) {
+          ctx.strokeStyle = '#2a0f1f'; ctx.lineWidth = 1.2;
+          ctx.beginPath(); ctx.arc(x, ey, 2.4, s.t * 9, s.t * 9 + 4.5); ctx.stroke();
+        } else { ctx.beginPath(); ctx.arc(x + dx / d * 1.8, ey + dy / d * 1.8, 2, 0, TAU); ctx.fill(); }
+        ctx.strokeStyle = '#2a0f1f'; ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        var tilt = s.mood > 0 ? -2 : (s.mood < 0 ? 2 : 0); // smug or worried
+        ctx.moveTo(x - 4, ey - 6 - tilt * k * -1); ctx.lineTo(x + 4, ey - 6 + tilt * k * -1);
+        ctx.stroke();
+      }
+      if (s.dizzy > 0) { // stars round its head
+        ctx.fillStyle = '#ffe27a';
+        for (var j = 0; j < 3; j++) { var a = s.t * 6 + j * TAU / 3; ctx.beginPath(); ctx.arc(q.x + Math.cos(a) * 22, q.y - 12 + Math.sin(a) * 4, 2, 0, TAU); ctx.fill(); }
+      }
+      ctx.restore();
+    }
+  });
+  var HIT_LINES = ['Ha!', 'Nope!', 'Mine!', 'Too easy!', 'Back you go!'];
+  var MISS_LINES = ['Hey!', 'Oops!', 'No fair!', 'Lucky!'];
 })(typeof window !== 'undefined' ? (window.BT = window.BT || {}) : (globalThis.BT = globalThis.BT || {}));
 
 // ---- levels.js ----
@@ -1417,8 +2477,8 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
     { n: 1, name: 'Warm-up', tint: '#151b3d', accent: '#ffd35a' },
     { n: 2, name: 'On the move', tint: '#0f2a3a', accent: '#4fd8ff' },
     { n: 3, name: 'Bend the ball', tint: '#25163e', accent: '#c56bff' },
-    { n: 4, name: 'Lights and switches', tint: '#1a1a1a', accent: '#ffcc33', soon: true },
-    { n: 5, name: 'Flip the rules', tint: '#2a1414', accent: '#ff6b6b', soon: true },
+    { n: 4, name: 'Lights and switches', tint: '#1a1a1a', accent: '#ffcc33' },
+    { n: 5, name: 'Flip the rules', tint: '#2a1414', accent: '#ff6b6b' },
     { n: 6, name: 'Mash-ups', tint: '#14261a', accent: '#2ee0a4', soon: true }
   ];
 
@@ -1649,6 +2709,175 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
         'p..........p'
       ],
       rules: [{ id: 'magnet', cx: 180, cy: 230, shieldRadius: 64, shield: '2c2c2c2c2c2c' }]
+    },
+
+    // ---------------- World 4: Lights and switches ----------------
+    {
+      id: 16, world: 4, name: 'Lights Out', twist: 'lightsout', par: 75,
+      banner: 'It\'s dark! Hit the glowing bricks to light things up.',
+      grid: [
+        '............',
+        '.cccccccccc.',
+        '.ccGccccGcc.',
+        '.cccccccccc.',
+        '............',
+        'bbbb....bbbb',
+        'bGbb....bbGb',
+        'bbbb....bbbb',
+        '............',
+        '....pppp....',
+        '....pGCp....',
+        '....pppp....'
+      ],
+      rules: [{ id: 'lightsout' }]
+    },
+    {
+      id: 17, world: 4, name: 'Red / Blue', twist: 'redblue', par: 95,
+      banner: 'Only one colour is solid. Hit a switch to swap red and blue!',
+      grid: [
+        '............',
+        '.BBBBBBBBBB.',
+        '.RRRRRRRRRR.',
+        '.BBBBBBBBBB.',
+        '............',
+        'S..........S',
+        '............',
+        '............',
+        '...RRRRRR...'
+      ],
+      rules: [{ id: 'redblue', start: 'red' }]
+    },
+    {
+      id: 18, world: 4, name: 'On the Beat', twist: 'beat', par: 95,
+      banner: 'Bricks fade in and out to the beat. The ball goes through faded ones.',
+      grid: [
+        '............',
+        '............',
+        'mmmmmmmmmmmm',
+        'mmmmmmmmmmmm',
+        'pppppppppppp',
+        'ppppCppppppp',
+        'bbbbbbbbbbbb',
+        'bbbbbbbCbbbb',
+        '............',
+        '..cccccccc..'
+      ],
+      rules: [{ id: 'beat', pattern: 'checker' }]
+    },
+    {
+      id: 19, world: 4, name: 'Overgrown', twist: 'overgrown', par: 115,
+      banner: 'Vines grow back! Smash the brown roots and their vines wither.',
+      grid: [
+        '.VVV....VVV.',
+        '.VOV....VOV.',
+        '.VVV....VVV.',
+        '..V......V..',
+        '............',
+        '....VVVV....',
+        '....VOVV....',
+        '....VVVV....',
+        '.....V......',
+        '............',
+        'C..........C'
+      ],
+      rules: [{ id: 'overgrown' }]
+    },
+    {
+      id: 20, world: 4, name: 'The Lighthouse', twist: 'boss-lighthouse', par: 85, clear: 'boss', boss: true,
+      banner: 'Boss! Bricks are only solid in the light. Hit the lamp in the middle.',
+      grid: [
+        'C..........C'
+      ],
+      rules: [{
+        id: 'lighthouse', cx: 180, cy: 222, startAngle: 0,
+        rings: [
+          { radius: 46, n: 10, ch: 'y', size: 18 },
+          { radius: 80, n: 16, ch: 'o', size: 18, offset: 0.5 },
+          { radius: 114, n: 22, ch: 'r', size: 18 }
+        ]
+      }]
+    },
+
+    // ---------------- World 5: Flip the rules ----------------
+    {
+      id: 21, world: 5, name: 'Double Trouble', twist: 'double', par: 85,
+      banner: 'A second paddle at the top copies yours. Keep the ball in at both ends!',
+      grid: [
+        '............', '............', '............', '............', '............',
+        '............', '............', '............', '............',
+        '..rrrrrrrr..',
+        '.oo.oooo.oo.',
+        'yyyyCyyCyyyy',
+        'gggggggggggg',
+        '.cc.cccc.cc.',
+        '..bbbbbbbb..'
+      ],
+      rules: [{ id: 'double' }]
+    },
+    {
+      id: 22, world: 5, name: 'Wraparound', twist: 'wrap', par: 115,
+      banner: 'No side walls! The ball and your paddle wrap round to the other side.',
+      grid: [
+        '............',
+        'cc........cc',
+        'cc..yyyy..cc',
+        'bb..mCmm..bb',
+        'bb........bb',
+        'pp........pp',
+        'pp##....##pp',
+        '............',
+        '............',
+        'gg........gg'
+      ],
+      rules: [{ id: 'wrap' }]
+    },
+    {
+      id: 23, world: 5, name: 'Brickfall', twist: 'brickfall', par: 125,
+      banner: 'Brick shapes drop in and stack up. Don\'t let the stack reach the red line!',
+      grid: [
+        '............', '............', '............', '............', '............',
+        '............', '............', '............', '............', '............',
+        '............', '............', '............', '............', '............',
+        '............',
+        '............',
+        'y..........y',
+        'oo...CC...oo',
+        'rrr.rrrr.rrr'
+      ],
+      rules: [{ id: 'brickfall' }]
+    },
+    {
+      id: 24, world: 5, name: 'Twelve Bounces', twist: 'bounces', par: 60, capsuleChance: 0,
+      banner: 'Puzzle! Clear it in 12 bounces. Run out and it just starts again.',
+      grid: [
+        'rrr......bbb',
+        'rrr......bbb',
+        'rTr......bTb',
+        '.T........T.',
+        '.T..oooo..T.',
+        '....oooo....',
+        '....oTTo....',
+        '.....TT.....',
+        '............',
+        'gg........gg',
+        'gT###..###Tg',
+        'gT........Tg'
+      ],
+      rules: [{ id: 'bounces' }]
+    },
+    {
+      id: 25, world: 5, name: 'The Rival', twist: 'boss-rival', par: 120, clear: 'boss', boss: true,
+      banner: 'Boss! Your Rival bats the ball back. Sneak past it and smash its core.',
+      grid: [
+        '.rrr....rrr.',
+        '.ooo....ooo.',
+        '...yyyyyy...',
+        '............',
+        '............', '............', '............', '............',
+        '............', '............', '............', '............',
+        'C..........C'
+      ],
+      rules: [{ id: 'rival' }]
     }
   ];
 
@@ -1724,8 +2953,16 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
     var pw = this.preset.paddleW;
     this.paddle = {
       x: C.W / 2, y: C.paddle.y, w: pw, h: C.paddle.h, targetX: C.W / 2,
-      prevX: C.W / 2, vx: 0, kv: 0, squash: 0, hitFlash: 0
+      prevX: C.W / 2, vx: 0, kv: 0, squash: 0, hitFlash: 0,
+      off: false              // a rule can switch the paddle off (the ball falls straight through)
     };
+
+    // Engine extension points that rules switch on in init (all off by default):
+    this.xpaddles = [];       // extra paddles, see addXPaddle (mirror paddle at the top, a computer rival)
+    this.wrapX = false;       // no side walls: ball and paddle wrap across the left/right edges
+    this.topOpen = false;     // no top wall: a ball that leaves through the top is lost
+    this.ghosting = false;    // some bricks can turn non-solid (see makeGhostable / resolveSolidity)
+    this.attempts = 0;        // retries of this level without a restart (see retry)
 
     this.buildGrid(level.grid || []);
     this.rules = [];
@@ -1818,9 +3055,11 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
   };
   G.pointTo = function (x) {
     this.paddle.targetX = this.eff.flip > 0 ? C.W - x : x;
+    if (this.wrapX) this.paddle.targetX = this.paddle.x + this.wrapDelta(this.paddle.targetX - this.paddle.x);
     this.clampTarget();
   };
   G.clampTarget = function () {
+    if (this.wrapX) return;
     var hw = this.paddle.w / 2 + C.paddle.edgeMargin;
     this.paddle.targetX = P.clamp(this.paddle.targetX, hw, C.W - hw);
   };
@@ -1864,6 +3103,7 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
       var L = this.lasers[i];
       if (L.alive) continue;
       L.alive = true; L.x = n === 0 ? p.x - p.w / 2 + 6 : p.x + p.w / 2 - 6; L.y = p.y - p.h / 2;
+      if (this.wrapX) L.x = this.wrapPos(L.x);
       n++;
     }
     this.fx.sound('laser');
@@ -1889,6 +3129,7 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
       if (this.state === 'lost') return;
     }
     this.finalizeBricks();
+    if (this.ghosting) this.resolveSolidity(dt);
 
     this.updateBlasts(dt);
     this.updateBalls(dt);
@@ -1948,10 +3189,18 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
     this.clampTarget();
     p.prevX = p.x;
     var dx = p.targetX - p.x, maxStep = cp.maxSpeed * dt;
-    p.x += P.clamp(dx, -maxStep, maxStep);
-    var hw = p.w / 2;
-    p.x = P.clamp(p.x, hw, C.W - hw);
-    var inst = (p.x - p.prevX) / dt;
+    var inst;
+    if (this.wrapX) { // no walls: move freely, then wrap position and target together
+      var mv = P.clamp(dx, -maxStep, maxStep);
+      p.x += mv;
+      if (p.x >= C.W) { p.x -= C.W; p.targetX -= C.W; } else if (p.x < 0) { p.x += C.W; p.targetX += C.W; }
+      inst = mv / dt;
+    } else {
+      p.x += P.clamp(dx, -maxStep, maxStep);
+      var hw = p.w / 2;
+      p.x = P.clamp(p.x, hw, C.W - hw);
+      inst = (p.x - p.prevX) / dt;
+    }
     p.vx += (inst - p.vx) * 0.5;
     if (p.squash > 0) p.squash -= dt;
     if (p.hitFlash > 0) p.hitFlash -= dt;
@@ -1964,7 +3213,7 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
       var b = balls[i];
       if (b.dead) continue;
       if (b.stuck) {
-        b.x = P.clamp(p.x + b.stuckOffset, b.r, C.W - b.r);
+        b.x = this.wrapX ? this.wrapPos(p.x + b.stuckOffset) : P.clamp(p.x + b.stuckOffset, b.r, C.W - b.r);
         b.y = p.y - p.h / 2 - b.r;
         b.prevX = b.x; b.prevY = b.y;
         if (!b.serve) {
@@ -2002,9 +3251,12 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
   };
 
   G.keepInside = function (b) {
-    if (b.x < b.r) { b.x = b.r; if (b.vx < 0) b.vx = -b.vx; }
-    if (b.x > C.W - b.r) { b.x = C.W - b.r; if (b.vx > 0) b.vx = -b.vx; }
-    if (b.y < C.TOP + b.r) { b.y = C.TOP + b.r; if (b.vy < 0) b.vy = -b.vy; }
+    if (this.wrapX) b.x = this.wrapPos(b.x);
+    else {
+      if (b.x < b.r) { b.x = b.r; if (b.vx < 0) b.vx = -b.vx; }
+      if (b.x > C.W - b.r) { b.x = C.W - b.r; if (b.vx > 0) b.vx = -b.vx; }
+    }
+    if (b.y < C.TOP + b.r && !this.topOpen) { b.y = C.TOP + b.r; if (b.vy < 0) b.vy = -b.vy; }
     if (!(b.x === b.x) || !(b.y === b.y)) { // NaN guard
       b.x = this.paddle.x; b.y = 400; b.vx = 0; b.vy = -1; this.normalizeBall(b);
     }
@@ -2022,21 +3274,28 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
       b.x += b.vx * sdt; b.y += b.vy * sdt;
 
       // walls
-      if (b.x < b.r) { b.x = b.r; if (b.vx < 0) { b.vx = -b.vx; this.fx.sound('wall'); } }
+      if (this.wrapX) {
+        if (b.x < 0) b.x += C.W; else if (b.x >= C.W) b.x -= C.W;
+      }
+      else if (b.x < b.r) { b.x = b.r; if (b.vx < 0) { b.vx = -b.vx; this.fx.sound('wall'); } }
       else if (b.x > C.W - b.r) { b.x = C.W - b.r; if (b.vx > 0) { b.vx = -b.vx; this.fx.sound('wall'); } }
-      if (b.y < C.TOP + b.r) { b.y = C.TOP + b.r; if (b.vy < 0) { b.vy = -b.vy; this.fx.sound('wall'); } }
+      if (this.topOpen) {
+        if (b.y + b.r < C.TOP) { b.dead = true; b.exitTop = true; return; }
+      }
+      else if (b.y < C.TOP + b.r) { b.y = C.TOP + b.r; if (b.vy < 0) { b.vy = -b.vy; this.fx.sound('wall'); } }
 
       // paddle
-      if (b.vy > 0) {
-        var hw = p.w / 2, ph = p.h / 2;
-        if (P.circleRect(b.x, b.y, b.r, p.x - hw, p.y - ph, p.w, p.h) > 0) {
-          if (b.y <= p.y + 1) this.paddleBounce(b);
+      if (b.vy > 0 && !p.off) {
+        var hw = p.w / 2, ph = p.h / 2, pxx = this.wrapX ? this.wrapNear(p.x, b.x) : p.x;
+        if (P.circleRect(b.x, b.y, b.r, pxx - hw, p.y - ph, p.w, p.h) > 0) {
+          if (b.y <= p.y + 1) this.paddleBounce(b, pxx);
           else { // clipped the side of the paddle: knock sideways, it is on its way out
-            b.x = b.x < p.x ? p.x - hw - b.r : p.x + hw + b.r;
-            b.vx = (b.x < p.x ? -1 : 1) * Math.abs(b.vx);
+            b.x = b.x < pxx ? pxx - hw - b.r : pxx + hw + b.r;
+            b.vx = (b.x < pxx ? -1 : 1) * Math.abs(b.vx);
           }
         }
       }
+      if (this.xpaddles.length) this.xpaddleCollide(b);
 
       // Easy safety net
       if (this.netActive && b.vy > 0 && b.y + b.r >= C.net.y && this.state !== 'clearing') {
@@ -2081,14 +3340,24 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
       }
       if (d > bestD) { bestD = d; best = k; bestN.nx = HIT.nx; bestN.ny = HIT.ny; }
     }
+    if (this.wrapX && (x < r || x > C.W - r)) { // the part of the ball showing on the other side
+      var wx = x < r ? x + C.W : x - C.W;
+      for (i = 0; i < bs.length; i++) {
+        k = bs[i];
+        if (!k.alive || !k.solid) continue;
+        d = P.circleRect(wx, y, r, k.x, k.y, k.w, k.h);
+        if (d > bestD) { bestD = d; best = k; bestN.nx = HIT.nx; bestN.ny = HIT.ny; }
+      }
+    }
     if (best) { HIT.nx = bestN.nx; HIT.ny = bestN.ny; HIT.depth = bestD; }
     return best;
   };
 
-  G.paddleBounce = function (b) {
+  G.paddleBounce = function (b, px) {
     var p = this.paddle;
+    if (px === undefined) px = p.x;
     b.y = p.y - p.h / 2 - b.r;
-    var a = P.paddleAngle(b.x, p.x, p.w / 2, p.vx, C.ball);
+    var a = P.paddleAngle(b.x, px, p.w / 2, p.vx, C.ball);
     var s = Math.min(this.speed() * b.boost, C.ball.absMaxSpeed);
     b.vx = Math.sin(a) * s; b.vy = -Math.cos(a) * s;
     p.squash = C.paddle.squashTime;
@@ -2100,7 +3369,7 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
     }
     this.fx.sound('paddle', a);
     if (this.eff['catch'] > 0 && this.state === 'play') {
-      b.stuck = true; b.stuckOffset = b.x - p.x; b.stuckTimer = 0;
+      b.stuck = true; b.stuckOffset = b.x - px; b.stuckTimer = 0;
       b.vx = 0; b.vy = 0;
     }
     for (var i = 0; i < this.rules.length; i++) {
@@ -2272,7 +3541,8 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
       c.x += (c.vx || 0) * dt;
       c.x = P.clamp(c.x, cw / 2, C.W - cw / 2);
       if (c.y - chh / 2 > C.H) { c.alive = false; continue; }
-      if (Math.abs(c.x - p.x) < (p.w + cw) / 2 && Math.abs(c.y - p.y) < (p.h + chh) / 2) {
+      var cdx = this.wrapX ? this.wrapDelta(c.x - p.x) : c.x - p.x;
+      if (Math.abs(cdx) < (p.w + cw) / 2 && Math.abs(c.y - p.y) < (p.h + chh) / 2) {
         c.alive = false;
         this.applyCapsule(c.type, c.x, c.y);
       }
@@ -2350,6 +3620,10 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
   // ---------- lives / win ----------
   G.loseLife = function (reason) {
     if (this.state !== 'play' && this.state !== 'serve') return;
+    for (var q = 0; q < this.rules.length; q++) { // a rule may handle the miss itself (e.g. a free retry)
+      var rq = this.rules[q];
+      if (rq.mod.beforeLifeLost && rq.mod.beforeLifeLost(this, rq, reason)) return;
+    }
     this.lives--;
     this.livesLost++;
     this.combo = 0;
@@ -2379,6 +3653,10 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
   G.isCleared = function () {
     var mode = this.level.clear || 'bricks';
     if (mode === 'boss') return !!(this.boss && this.boss.s.defeated);
+    for (var q = 0; q < this.rules.length; q++) { // e.g. more bricks still to arrive
+      var rq = this.rules[q];
+      if (rq.mod.holdClear && rq.mod.holdClear(this, rq)) return false;
+    }
     var bs = this.bricks;
     for (var i = 0; i < bs.length; i++) {
       var k = bs[i];
@@ -2404,6 +3682,117 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
     if (this.livesLost === 0) { stars = 2; if (this.clock <= par) stars = 3; }
     this.result = { stars: stars, time: this.clock, par: par, score: this.score, livesLost: this.livesLost };
     this.fx.sound('win');
+  };
+
+  // ---------- engine extension points used by rules ----------
+  // Wrapping helpers (only meaningful when wrapX is on).
+  G.wrapPos = function (x) { x %= C.W; return x < 0 ? x + C.W : x; };
+  G.wrapDelta = function (d) { d = ((d % C.W) + C.W * 1.5) % C.W - C.W / 2; return d; };
+  G.wrapNear = function (x, ref) { return ref + this.wrapDelta(x - ref); };
+
+  // True if any live ball is within margin of the rect: rules use it so a brick never appears,
+  // turns solid, lands or grows on top of a ball.
+  G.ballNear = function (x, y, w, h, margin) {
+    var m = margin || 0;
+    for (var i = 0; i < this.balls.length; i++) {
+      var b = this.balls[i];
+      if (b.dead) continue;
+      var bx = b.x;
+      if (this.wrapX) bx = this.wrapNear(bx, x + w / 2);
+      if (bx + b.r + m > x && bx - b.r - m < x + w && b.y + b.r + m > y && b.y - b.r - m < y + h) return true;
+    }
+    return false;
+  };
+
+  // Ghost bricks. A rule marks bricks ghostable once, then each step sets b.wantGhost = true on the ones it
+  // wants see-through (several rules can vote; any vote makes it a ghost). The engine then applies it:
+  // a brick only turns solid when no ball is touching it (b.pending shows it is waiting), and b.ghost
+  // animates 0 (solid look) .. 1 (ghost look) for the renderer.
+  G.makeGhostable = function (b) {
+    b.ghostable = true; b.wantGhost = false; b.pending = false; b.warn = 0;
+    if (b.ghost == null) b.ghost = b.solid ? 0 : 1;
+    this.ghosting = true;
+  };
+  G.resolveSolidity = function (dt) {
+    var bs = this.bricks, k = Math.min(1, dt * 14);
+    for (var i = 0; i < bs.length; i++) {
+      var b = bs[i];
+      if (!b.ghostable || !b.alive) continue;
+      if (b.wantGhost) { b.solid = false; b.pending = false; }
+      else if (!b.solid) {
+        if (this.ballNear(b.x, b.y, b.w, b.h, 2)) b.pending = true;
+        else { b.solid = true; b.pending = false; }
+      }
+      b.ghost += ((b.solid ? 0 : 1) - b.ghost) * k;
+      b.wantGhost = false;
+    }
+  };
+
+  // Extra paddles. face: +1 bounces the ball downward (paddle at the top), -1 upward. They are one-way:
+  // only a ball travelling towards the face is hit. counts: true makes a hit count as the player's own
+  // paddle hit (combo reset, speed-up). Rules move them by writing x / w / vx each step.
+  G.addXPaddle = function (opts) {
+    var xp = { x: C.W / 2, y: 100, w: 70, h: C.paddle.h, vx: 0, face: 1, counts: false, owner: null,
+      kind: 'mirror', color: '#4fd8ff', squash: 0, hitFlash: 0, off: false };
+    for (var k in opts) xp[k] = opts[k];
+    this.xpaddles.push(xp);
+    return xp;
+  };
+  G.xpaddleCollide = function (b) {
+    for (var i = 0; i < this.xpaddles.length; i++) {
+      var q = this.xpaddles[i];
+      if (q.off || (q.face > 0 ? b.vy >= 0 : b.vy <= 0)) continue;
+      var hw = q.w / 2, qx = this.wrapX ? this.wrapNear(q.x, b.x) : q.x;
+      if (P.circleRect(b.x, b.y, b.r, qx - hw, q.y - q.h / 2, q.w, q.h) <= 0) continue;
+      if (q.face > 0 ? b.y >= q.y - 1 : b.y <= q.y + 1) this.xpaddleBounce(b, q, qx);
+      else {
+        b.x = b.x < qx ? qx - hw - b.r : qx + hw + b.r;
+        b.vx = (b.x < qx ? -1 : 1) * Math.abs(b.vx);
+      }
+    }
+  };
+  G.xpaddleBounce = function (b, q, qx) {
+    b.y = q.y + q.face * (q.h / 2 + b.r);
+    var a = P.paddleAngle(b.x, qx, q.w / 2, q.vx, C.ball) + (q.aim || 0);
+    a = P.clamp(a, -C.ball.maxAngleDeg * P.DEG, C.ball.maxAngleDeg * P.DEG);
+    var s = Math.min(this.speed() * b.boost, C.ball.absMaxSpeed);
+    b.vx = Math.sin(a) * s; b.vy = q.face * Math.cos(a) * s;
+    q.squash = C.paddle.squashTime; q.hitFlash = 0.1;
+    if (q.counts) {
+      this.combo = 0;
+      this.paddleHits++;
+      if (this.paddleHits % C.ball.speedUpEvery === 0) this.ballSpeed = Math.min(this.preset.speedMax, this.ballSpeed + C.ball.speedUpStep);
+    }
+    this.fx.sound('paddle', a);
+    for (var i = 0; i < this.rules.length; i++) {
+      var r = this.rules[i];
+      if (r.mod.onPaddleHit) r.mod.onPaddleHit(this, r, b, q);
+    }
+  };
+
+  // Start the level again in place without costing a life (rules that offer free retries use this).
+  // Lives, time played and the attempt count carry over; bricks, rules, balls and score start afresh.
+  G.retry = function () {
+    this.attempts++;
+    this.state = 'serve';
+    this.score = 0; this.combo = 0; this.paddleHits = 0;
+    this.ballSpeed = this.preset.speedStart;
+    this.timeScale = 1; this.sinceLaunch = 0; this.sinceHit = 0;
+    this.bomb = false; this.netActive = !!this.preset.net;
+    for (var k in this.eff) this.eff[k] = 0;
+    this.blasts.length = 0;
+    var i;
+    for (i = 0; i < this.capsules.length; i++) this.capsules[i].alive = false;
+    for (i = 0; i < this.lasers.length; i++) this.lasers[i].alive = false;
+    this.paddle.off = false;
+    this.xpaddles.length = 0; this.wrapX = false; this.topOpen = false; this.ghosting = false;
+    this.bricks.length = 0;
+    this.buildGrid(this.level.grid || []);
+    this.rules = []; this.boss = null;
+    var rl = this.level.rules || [];
+    for (i = 0; i < rl.length; i++) this.addRule(rl[i]);
+    this.finalizeBricks();
+    this.newServeBall();
   };
 
   // Count of bricks the level needs destroyed (for HUD/tests).
@@ -2736,6 +4125,14 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
           [784, 988, 1175, 1568].forEach(function (n, i) { this.tone('square', n, n, 0.14, 0.1, 0.3 + i * 0.09); }, this);
           break;
         case 'flip': this.tone('sawtooth', 200, 900, 0.2, 0.1); break;
+        case 'lantern': this.tone('sine', 660, 990, 0.25, 0.16); this.tone('sine', 1320, 1320, 0.4, 0.06, 0.08); break;
+        case 'swap': this.tone('square', 520, 780, 0.08, 0.12); this.tone('square', 780, 520, 0.08, 0.1, 0.08); break;
+        case 'beat': this.tone('sine', arg ? 330 : 440, arg ? 330 : 440, 0.06, 0.12); break;
+        case 'grow': this.tone('triangle', 260, 420, 0.12, 0.08); break;
+        case 'wither': this.tone('triangle', 420, 140, 0.5, 0.18); this.hiss(0.4, 0.08, 'lowpass', 900); break;
+        case 'drop': this.tone('sine', 900, 500, 0.12, 0.08); break;
+        case 'land': this.tone('square', 140, 110, 0.07, 0.14); this.hiss(0.06, 0.1, 'lowpass', 700); break;
+        case 'retry': this.tone('triangle', 392, 392, 0.08, 0.14); this.tone('triangle', 523, 523, 0.12, 0.14, 0.08); break;
       }
     }
   };
@@ -2851,8 +4248,56 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
     return c;
   }
 
+  // Offscreen layers at playfield resolution (rules use them, e.g. the Lights Out darkness) and a soft light sprite.
+  var layers = {}, lightSpr = null;
+  R.layer = function (name) {
+    var L = layers[name];
+    if (!L) { var c = makeCanvas(C.W, C.H); L = layers[name] = { canvas: c, ctx: c.getContext('2d') }; }
+    return L;
+  };
+  R.lightSprite = function () {
+    if (lightSpr) return lightSpr;
+    var s = 128, c = makeCanvas(s, s), x = c.getContext('2d');
+    var grd = x.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+    grd.addColorStop(0, 'rgba(255,255,255,1)'); grd.addColorStop(0.45, 'rgba(255,255,255,0.9)');
+    grd.addColorStop(0.75, 'rgba(255,255,255,0.4)'); grd.addColorStop(1, 'rgba(255,255,255,0)');
+    x.fillStyle = grd; x.fillRect(0, 0, s, s);
+    lightSpr = c;
+    return c;
+  };
+
   // ---------------- bricks ----------------
+  // Small shape mark in the middle of a brick (so groups never rely on colour alone).
+  function drawMark(ctx, b, cx, cy, col) {
+    ctx.fillStyle = col;
+    if (b.mark === 'dot') { ctx.beginPath(); ctx.arc(cx, cy, 3, 0, TAU); ctx.fill(); }
+    else if (b.mark === 'square') ctx.fillRect(cx - 3, cy - 3, 6, 6);
+  }
+
+  // A brick that is see-through (or fading): faint fill, dashed outline. b.warn pulses a white outline just
+  // before it turns solid; b.pending flickers while it waits for a ball to move out of the way.
+  function drawGhost(ctx, b, t, gh) {
+    var x = b.x, y = b.y, w = b.w, h = b.h;
+    ctx.globalAlpha = 1 - 0.85 * gh;
+    roundRect(ctx, x, y, w, h, 3);
+    ctx.fillStyle = b.color; ctx.fill();
+    ctx.globalAlpha = 0.45 + 0.55 * gh;
+    ctx.setLineDash([4, 3]);
+    ctx.lineWidth = 1.5; ctx.strokeStyle = b.color;
+    roundRect(ctx, x + 0.75, y + 0.75, w - 1.5, h - 1.5, 3); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+    if (b.mark) drawMark(ctx, b, x + w / 2, y + h / 2, b.color);
+    var wa = b.pending ? 0.5 + 0.5 * Math.sin(t * 40) : (b.warn > 0 ? b.warn * (0.55 + 0.45 * Math.sin(t * 26)) : 0);
+    if (wa > 0) {
+      ctx.strokeStyle = 'rgba(255,255,255,' + Math.min(1, wa).toFixed(3) + ')'; ctx.lineWidth = 2;
+      roundRect(ctx, x - 0.5, y - 0.5, w + 1, h + 1, 3.5); ctx.stroke();
+    }
+  }
+
   function drawBrick(ctx, b, t) {
+    var gh = b.ghost || 0;
+    if (gh > 0.04) { drawGhost(ctx, b, t, gh); return; }
     var x = b.x, y = b.y, w = b.w, h = b.h;
     if (b.shake > 0) { b.shake -= 1 / 60; x += Math.sin(t * 90) * 1.2; }
     roundRect(ctx, x, y, w, h, 3);
@@ -2911,6 +4356,46 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
         ctx.beginPath(); ctx.moveTo(cx, y + 2); ctx.lineTo(cx - 6, cy + 1); ctx.lineTo(cx - 2, cy + 1); ctx.lineTo(cx - 2, y + h - 2);
         ctx.lineTo(cx + 2, y + h - 2); ctx.lineTo(cx + 2, cy + 1); ctx.lineTo(cx + 6, cy + 1); ctx.closePath(); ctx.fill();
         break;
+      case 'glow': // a little sun
+        var gp = 0.5 + 0.5 * Math.sin(t * 4 + x);
+        ctx.fillStyle = '#8a5a00';
+        ctx.beginPath(); ctx.arc(cx, cy, 3, 0, TAU); ctx.fill();
+        ctx.strokeStyle = '#8a5a00'; ctx.lineWidth = 1.3;
+        ctx.beginPath();
+        for (var ri = 0; ri < 6; ri++) { var ra = ri * TAU / 6 + t; ctx.moveTo(cx + Math.cos(ra) * 4.5, cy + Math.sin(ra) * 4.5); ctx.lineTo(cx + Math.cos(ra) * 6.5, cy + Math.sin(ra) * 6.5); }
+        ctx.stroke();
+        ctx.strokeStyle = 'rgba(255,240,170,' + (0.4 + 0.5 * gp).toFixed(3) + ')'; ctx.lineWidth = 2;
+        roundRect(ctx, x - 1.5, y - 1.5, w + 3, h + 3, 4.5); ctx.stroke();
+        break;
+      case 'switch': // half red, half blue, with swap arrows; the solid colour's half is outlined
+        var redOn = b.showing !== 'blue';
+        ctx.save(); roundRect(ctx, x, y, w, h, 3); ctx.clip();
+        ctx.fillStyle = BT.Bricks.RED_COLOR; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + w, y); ctx.lineTo(x, y + h); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = BT.Bricks.BLUE_COLOR; ctx.beginPath(); ctx.moveTo(x + w, y); ctx.lineTo(x + w, y + h); ctx.lineTo(x, y + h); ctx.closePath(); ctx.fill();
+        ctx.restore();
+        ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(cx - 7, cy - 2); ctx.lineTo(cx + 6, cy - 2); ctx.lineTo(cx + 3, cy - 5);
+        ctx.moveTo(cx + 7, cy + 2); ctx.lineTo(cx - 6, cy + 2); ctx.lineTo(cx - 3, cy + 5); ctx.stroke();
+        ctx.strokeStyle = redOn ? '#ffb0b8' : '#b0ccff'; ctx.lineWidth = 2;
+        roundRect(ctx, x - 1, y - 1, w + 2, h + 2, 4); ctx.stroke();
+        break;
+      case 'vine':
+        ctx.fillStyle = b.withering ? 'rgba(120,90,40,0.8)' : '#1d7a3a';
+        ctx.beginPath(); ctx.ellipse(cx - 5, cy, 4.5, 2.2, -0.5, 0, TAU); ctx.fill();
+        ctx.beginPath(); ctx.ellipse(cx + 5, cy, 4.5, 2.2, 0.5, 0, TAU); ctx.fill();
+        ctx.fillRect(cx - 0.75, cy - 4, 1.5, 8);
+        break;
+      case 'root':
+        ctx.strokeStyle = '#3d2410'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(cx, y + 2); ctx.lineTo(cx, cy + 1); ctx.lineTo(cx - 7, y + h - 2);
+        ctx.moveTo(cx, cy + 1); ctx.lineTo(cx + 7, y + h - 2); ctx.moveTo(cx, cy + 1); ctx.lineTo(cx, y + h - 1); ctx.stroke();
+        ctx.fillStyle = '#ffe0b0';
+        for (var hi = 0; hi < b.hp; hi++) { ctx.beginPath(); ctx.arc(x + 5 + hi * 4, y + 4, 1.4, 0, TAU); ctx.fill(); }
+        if (b.hp < b.maxHp) {
+          ctx.strokeStyle = 'rgba(20,10,0,0.8)'; ctx.lineWidth = 1.2;
+          ctx.beginPath(); ctx.moveTo(x + w - 4, y + 2); ctx.lineTo(x + w - 9, cy); ctx.lineTo(x + w - 6, y + h - 2); ctx.stroke();
+        }
+        break;
       case 'core':
         var pu = 0.5 + 0.5 * Math.sin(t * 6);
         ctx.strokeStyle = 'rgba(255,255,255,' + (0.5 + 0.5 * pu).toFixed(3) + ')'; ctx.lineWidth = 2;
@@ -2919,11 +4404,17 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
         for (var j = 0; j < b.hp; j++) { ctx.beginPath(); ctx.arc(cx - (b.hp - 1) * 3 + j * 6, y + h - 4, 1.6, 0, TAU); ctx.fill(); }
         break;
     }
+    if (b.mark) drawMark(ctx, b, cx, cy + 0.5, 'rgba(10,12,30,0.45)');
+    if (b.ghostable) { // solid and switchable: crisp bright outline, the opposite of the ghost's dashed one
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 1.5;
+      roundRect(ctx, x + 0.75, y + 0.75, w - 1.5, h - 1.5, 3); ctx.stroke();
+    }
     if (b.flash > 0) {
       ctx.fillStyle = 'rgba(255,255,255,' + Math.min(0.85, b.flash * 7).toFixed(3) + ')';
       roundRect(ctx, x, y, w, h, 3); ctx.fill();
     }
   }
+  R.drawBrick = drawBrick;
 
   function drawBricks(ctx, g) {
     var bs = g.bricks, t = g.t;
@@ -2943,6 +4434,11 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
   var paddleGrads = {};
   function drawPaddle(ctx, g) {
     var p = g.paddle, e = g.eff;
+    if (p.off) { // switched off (e.g. out of bounces): a faint dashed outline the ball falls through
+      ctx.setLineDash([5, 4]); ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 1.5;
+      roundRect(ctx, p.x - p.w / 2, p.y - p.h / 2, p.w, p.h, p.h / 2); ctx.stroke(); ctx.setLineDash([]);
+      return;
+    }
     var sq = p.squash > 0 ? p.squash / C.paddle.squashTime : 0;
     var w = p.w * (1 + 0.08 * sq), h = p.h * (1 - 0.35 * sq);
     var x = p.x - w / 2, y = p.y - h / 2 + (p.h - h) / 2;
@@ -3000,6 +4496,35 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
         ctx.beginPath(); ctx.arc(b.x - 1.8, b.y - 1.8, b.r * 0.35, 0, TAU); ctx.fill();
       }
     }
+  }
+
+  // Extra paddles (mirror paddle at the top, computer rival). Same look as yours, in their own colour.
+  var xpGrads = {};
+  function drawXPaddle(ctx, g, q) {
+    if (q.off) return;
+    var sq = q.squash > 0 ? q.squash / C.paddle.squashTime : 0;
+    var w = q.w * (1 + 0.08 * sq), h = q.h * (1 - 0.35 * sq);
+    var x = q.x - w / 2, y = q.y - h / 2;
+    ctx.fillStyle = 'rgba(255,255,255,0.10)';
+    roundRect(ctx, x - 4, y - 4, w + 8, h + 8, (h + 8) / 2); ctx.fill();
+    var key = q.color + '@' + q.y, grd = xpGrads[key];
+    if (!grd) {
+      grd = xpGrads[key] = ctx.createLinearGradient(0, q.y + q.h / 2, 0, q.y - q.h / 2); // lit from below: it faces down
+      grd.addColorStop(0, '#ffffff'); grd.addColorStop(0.35, q.color); grd.addColorStop(1, '#4a1f1f');
+    }
+    ctx.fillStyle = q.hitFlash > 0 ? '#ffffff' : grd;
+    roundRect(ctx, x, y, w, h, h / 2); ctx.fill();
+    if (q.kind === 'mirror') { // small chevrons: "copies you"
+      ctx.strokeStyle = 'rgba(60,30,0,0.6)'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(q.x - 4, q.y - 2); ctx.lineTo(q.x, q.y + 2); ctx.lineTo(q.x + 4, q.y - 2); ctx.stroke();
+    }
+  }
+
+  // Draw fn at x, plus copies one playfield-width either side when the field wraps (seamless edges).
+  function wrapDraw(ctx, g, fn, a) {
+    fn(ctx, g, a);
+    if (!g.wrapX) return;
+    ctx.save(); ctx.translate(C.W, 0); fn(ctx, g, a); ctx.translate(-2 * C.W, 0); fn(ctx, g, a); ctx.restore();
   }
 
   function drawCapsule(ctx, type, x, y, t, scale) {
@@ -3080,11 +4605,14 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
       ctx.save();
       if (g.shakeAmt > 0) ctx.translate((Math.random() - 0.5) * g.shakeAmt * 2, (Math.random() - 0.5) * g.shakeAmt * 2);
       // walls
-      ctx.fillStyle = 'rgba(120,160,255,0.18)';
-      ctx.fillRect(0, C.TOP, 2, C.H - C.TOP); ctx.fillRect(C.W - 2, C.TOP, 2, C.H - C.TOP);
+      if (!g.wrapX) {
+        ctx.fillStyle = 'rgba(120,160,255,0.18)';
+        ctx.fillRect(0, C.TOP, 2, C.H - C.TOP); ctx.fillRect(C.W - 2, C.TOP, 2, C.H - C.TOP);
+      }
       var i, r;
       for (i = 0; i < g.rules.length; i++) { r = g.rules[i]; if (r.mod.render) r.mod.render(ctx, g, r, 'back', R); }
       drawBricks(ctx, g);
+      for (i = 0; i < g.rules.length; i++) { r = g.rules[i]; if (r.mod.renderOverBricks) r.mod.renderOverBricks(ctx, g, r, R); }
       // capsules
       for (i = 0; i < g.capsules.length; i++) {
         var c = g.capsules[i];
@@ -3098,11 +4626,12 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
         ctx.fillStyle = 'rgba(124,245,255,' + na.toFixed(3) + ')';
         ctx.fillRect(0, C.net.y, C.W, 2);
       }
-      drawPaddle(ctx, g);
+      wrapDraw(ctx, g, drawPaddle);
+      for (i = 0; i < g.xpaddles.length; i++) wrapDraw(ctx, g, drawXPaddle, g.xpaddles[i]);
       // lasers
       ctx.fillStyle = '#ffb36b';
       for (i = 0; i < g.lasers.length; i++) { var L = g.lasers[i]; if (L.alive) ctx.fillRect(L.x - 1.5, L.y - 8, 3, 12); }
-      drawBalls(ctx, g);
+      wrapDraw(ctx, g, drawBalls);
       BT.Particles.draw(ctx);
       for (i = 0; i < g.rules.length; i++) { r = g.rules[i]; if (r.mod.render) r.mod.render(ctx, g, r, 'front', R); }
       ctx.restore();
@@ -3302,20 +4831,20 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
       var pr = C.presets[cur];
       ctx.fillText(pr.blurb + ' · ' + pr.lives + ' lives', C.W / 2, 144);
 
-      // worlds 1-3 playable
-      var y = 162;
+      // playable worlds (compact rows so five fit on a phone screen)
+      var y = 158;
       for (var w = 0; w < BT.WORLDS.length; w++) {
         var W = BT.WORLDS[w];
         if (W.soon) continue;
-        ctx.textAlign = 'left'; ctx.fillStyle = W.accent; ctx.font = 'bold 13px ' + R.FONT;
+        ctx.textAlign = 'left'; ctx.fillStyle = W.accent; ctx.font = 'bold 12px ' + R.FONT;
         ctx.fillText('WORLD ' + W.n, 20, y + 6);
-        ctx.fillStyle = 'rgba(255,255,255,0.75)'; ctx.font = '13px ' + R.FONT;
-        ctx.fillText(W.name, 90, y + 6);
+        ctx.fillStyle = 'rgba(255,255,255,0.75)'; ctx.font = '12px ' + R.FONT;
+        ctx.fillText(W.name, 86, y + 6);
         for (i = 0; i < 5; i++) {
           var id = (W.n - 1) * 5 + i + 1, L = BT.levelById(id);
-          this.tile(ctx, 20 + i * 66, y + 16, L, W, S, t);
+          this.tile(ctx, 20 + i * 66, y + 14, L, W, S, t);
         }
-        y += 94;
+        y += 76;
       }
       // worlds 4-6: coming soon
       for (w = 0; w < BT.WORLDS.length; w++) {
@@ -3329,16 +4858,16 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
         ctx.font = '12px ' + R.FONT; ctx.fillText(W.name, 98, y + 16);
         ctx.textAlign = 'right'; ctx.fillStyle = 'rgba(255,211,90,0.55)'; ctx.font = 'italic 12px ' + R.FONT;
         ctx.fillText('coming soon', C.W - 32, y + 16);
-        y += 36;
+        y += 34;
       }
       // footer
       var total = S.totalStars(), max = BT.LEVELS.length * 3;
-      R.drawStar(ctx, C.W / 2 - 40, y + 20, 8, true);
+      R.drawStar(ctx, C.W / 2 - 40, y + 16, 8, true);
       ctx.textAlign = 'left'; ctx.fillStyle = '#ffffff'; ctx.font = 'bold 14px ' + R.FONT;
-      ctx.fillText(total + ' / ' + max, C.W / 2 - 26, y + 21);
+      ctx.fillText(total + ' / ' + max, C.W / 2 - 26, y + 17);
       ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(255,255,255,0.45)'; ctx.font = '11px ' + R.FONT;
-      ctx.fillText('Drag anywhere to steer · tap to launch · keys: arrows + space', C.W / 2, y + 46);
-      if (!S.ok) { ctx.fillStyle = 'rgba(255,160,120,0.6)'; ctx.fillText('Progress is not being saved on this device', C.W / 2, y + 62); }
+      ctx.fillText('Drag anywhere to steer · tap to launch · keys: arrows + space', C.W / 2, y + 38);
+      if (!S.ok) { ctx.fillStyle = 'rgba(255,160,120,0.6)'; ctx.fillText('Progress is not being saved on this device', C.W / 2, y + 53); }
     },
 
     drawLogo: function (ctx, t) {
@@ -3370,7 +4899,7 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
     },
 
     tile: function (ctx, x, y, L, W, S, t) {
-      var R = BT.Render.R, w = 56, h = 62;
+      var R = BT.Render.R, w = 56, h = 54;
       var unlocked = S.isUnlocked(L.id), info = S.levelInfo(L.id);
       R.roundRect(ctx, x, y, w, h, 10);
       ctx.fillStyle = unlocked ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.03)'; ctx.fill();
@@ -3378,18 +4907,18 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       if (!unlocked) {
         ctx.fillStyle = 'rgba(255,255,255,0.25)';
-        ctx.fillRect(x + w / 2 - 7, y + 26, 14, 11);
+        ctx.fillRect(x + w / 2 - 7, y + 23, 14, 11);
         ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.arc(x + w / 2, y + 26, 5, Math.PI, 0); ctx.stroke();
+        ctx.beginPath(); ctx.arc(x + w / 2, y + 23, 5, Math.PI, 0); ctx.stroke();
         return;
       }
       if (L.boss) { // crown
         ctx.fillStyle = W.accent;
-        ctx.beginPath(); ctx.moveTo(x + 18, y + 14); ctx.lineTo(x + 22, y + 6); ctx.lineTo(x + 28, y + 11); ctx.lineTo(x + 34, y + 6); ctx.lineTo(x + 38, y + 14); ctx.closePath(); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(x + 18, y + 12); ctx.lineTo(x + 22, y + 4); ctx.lineTo(x + 28, y + 9); ctx.lineTo(x + 34, y + 4); ctx.lineTo(x + 38, y + 12); ctx.closePath(); ctx.fill();
       }
-      ctx.fillStyle = '#ffffff'; ctx.font = 'bold 20px ' + R.FONT;
-      ctx.fillText(String(L.id), x + w / 2, y + (L.boss ? 28 : 24));
-      for (var s = 0; s < 3; s++) R.drawStar(ctx, x + 14 + s * 14, y + 48, 5.5, s < info.stars);
+      ctx.fillStyle = '#ffffff'; ctx.font = 'bold 19px ' + R.FONT;
+      ctx.fillText(String(L.id), x + w / 2, y + (L.boss ? 24 : 21));
+      for (var s = 0; s < 3; s++) R.drawStar(ctx, x + 14 + s * 14, y + 42, 5.5, s < info.stars);
       this.add(x - 2, y - 2, w + 4, h + 4, 'start:' + L.id);
     },
 
@@ -3460,7 +4989,8 @@ noscript { color: #fff; font: 16px system-ui, sans-serif; display: block; paddin
       if (next) this.button(ctx, 60, 340, C.W - 120, 48, 'Next level', 'next', true);
       else {
         ctx.fillStyle = '#ffd35a'; ctx.font = 'bold 14px ' + R.FONT;
-        ctx.fillText('World 4 is coming soon!', C.W / 2, 364);
+        var nextW = BT.WORLDS[L.world]; // the world after this one
+        ctx.fillText(nextW ? 'World ' + nextW.n + ' is coming soon!' : 'You beat them all!', C.W / 2, 364);
       }
       this.button(ctx, 60, 400, (C.W - 132) / 2, 46, 'Replay', 'restart');
       this.button(ctx, 72 + (C.W - 132) / 2, 400, (C.W - 132) / 2, 46, 'Levels', 'levels');

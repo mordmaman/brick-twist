@@ -111,9 +111,9 @@ section('Physics');
 
 // ------------------------------------------------------------------ level data
 section('Level data');
-var GRID_BREAKABLE = 'roygcbpmw23TKCL';
+var GRID_BREAKABLE = 'roygcbpmw23TKCLGRBVO';
 (function () {
-  ok(BT.LEVELS.length === 15, '15 levels in phase 1');
+  ok(BT.LEVELS.length === 25, '25 levels (phases 1 and 2)');
   BT.LEVELS.forEach(function (L, idx) {
     ok(L.id === idx + 1, 'level ids in order (' + L.id + ')');
     ok(!!L.banner && !!L.name && !!L.twist, 'level ' + L.id + ' has name, twist and banner');
@@ -187,22 +187,33 @@ function Bot(g, rng, clumsy) {
   this.clumsy = !!clumsy; this.finger = g.paddle.x; this.think = 0; this.goal = g.paddle.x; this.err = 0;
 }
 Bot.prototype.act = function (dt) {
-  var g = this.g, p = g.paddle, i, best = null, bestT = 1e9;
+  var g = this.g, p = g.paddle, i, best = null, bestT = 1e9, bestTop = false;
+  // a mirrored top paddle that copies ours (Double Trouble) has to be steered under balls going up too
+  var top = null;
+  for (i = 0; i < g.xpaddles.length; i++) if (g.xpaddles[i].counts && g.xpaddles[i].face > 0) top = g.xpaddles[i];
   for (i = 0; i < g.balls.length; i++) {
     var b = g.balls[i];
     if (b.stuck) { this.wait -= dt; if (this.wait <= 0) { g.tap(); this.wait = 0.3 + this.rng() * 0.4; } continue; }
     if (b.vy > 0) {
       var t = (p.y - b.y) / b.vy;
-      if (t < bestT) { bestT = t; best = b; }
+      if (t < bestT) { bestT = t; best = b; bestTop = false; }
+    } else if (top && b.vy < 0 && b.y > top.y) {
+      var t2 = (b.y - top.y) / -b.vy;
+      if (t2 < bestT) { bestT = t2; best = b; bestTop = true; }
     }
   }
   var target = p.x;
   if (best) {
-    var lx = BT.Physics.predictLandingX(best.x, best.y, best.vx, best.vy, p.y - p.h / 2 - best.r, best.r, C.W - best.r);
+    var lx, ty, w = p.w;
+    if (bestTop) { ty = top.y + top.h / 2 + best.r; w = top.w; } else ty = p.y - p.h / 2 - best.r;
+    if (g.wrapX) lx = g.wrapPos(best.x + best.vx * (ty - best.y) / best.vy);
+    else if (bestTop) lx = BT.Physics.predictLandingX(best.x, -best.y, best.vx, -best.vy, -ty, best.r, C.W - best.r);
+    else lx = BT.Physics.predictLandingX(best.x, best.y, best.vx, best.vy, ty, best.r, C.W - best.r);
     // pick a new aim offset each time a fresh ball approach starts
-    if (this.lastDir <= 0) this.offset = (this.rng() * 2 - 1) * p.w * 0.38;
+    var dir = bestTop ? 2 : 1;
+    if (this.lastDir !== dir) this.offset = (this.rng() * 2 - 1) * w * (bestTop ? 0.3 : 0.38);
     target = lx - this.offset + (this.rng() - 0.5) * 4;
-    this.lastDir = 1;
+    this.lastDir = dir;
   } else {
     this.lastDir = -1;
     for (i = 0; i < g.balls.length; i++) if (!g.balls[i].stuck) { target = target * 0.98 + g.balls[i].x * 0.02; break; }
@@ -215,7 +226,8 @@ Bot.prototype.act = function (dt) {
       this.goal = target + this.err;
     }
     var maxMove = 420 * dt; // a slow, careful thumb
-    this.finger += Math.max(-maxMove, Math.min(maxMove, this.goal - this.finger));
+    var togo = g.wrapX ? g.wrapDelta(this.goal - this.finger) : this.goal - this.finger;
+    this.finger += Math.max(-maxMove, Math.min(maxMove, togo));
     target = this.finger;
   }
   if (g.eff.flip > 0) target = C.W - target;
@@ -224,19 +236,29 @@ Bot.prototype.act = function (dt) {
 };
 
 function checkBalls(g, report) {
+  // intended exits: the bottom; the top when g.topOpen (Double Trouble); the side edges wrap when g.wrapX
+  var minX = g.wrapX ? 0 : null, maxX = g.wrapX ? C.W : null;
   for (var i = 0; i < g.balls.length; i++) {
     var b = g.balls[i];
     if (b.stuck) continue;
     var sp = Math.hypot(b.vx, b.vy);
     if (sp > C.ball.absMaxSpeed + 1e-6) report.speed++;
-    if (b.x < b.r - 0.01 || b.x > C.W - b.r + 0.01 || b.y < C.TOP + b.r - 0.01 || !(b.x === b.x) || !(b.y === b.y)) report.outside++;
+    var lo = minX === null ? b.r : minX, hi = maxX === null ? C.W - b.r : maxX;
+    var top = g.topOpen ? C.TOP - b.r : C.TOP + b.r;
+    if (b.x < lo - 0.01 || b.x > hi + 0.01 || b.y < top - 0.01 || !(b.x === b.x) || !(b.y === b.y)) report.outside++;
+    if (report.inside != null) { // phase-2 levels: a ball is never left inside a solid brick
+      for (var j = 0; j < g.bricks.length; j++) {
+        var k = g.bricks[j];
+        if (k.alive && k.solid && BT.Physics.circleRect(b.x, b.y, b.r, k.x, k.y, k.w, k.h) > 2.5) { report.inside++; break; }
+      }
+    }
   }
 }
 
 function playLevel(L, preset, seed, limitSec, clumsy) {
   var rng = BT.mulberry32(seed * 7919 + 13);
   var total = 0, gameOvers = 0, steps = Math.round(limitSec / DT);
-  var report = { speed: 0, outside: 0 };
+  var report = { speed: 0, outside: 0, inside: L.id > 15 ? 0 : null, rival: null, attempts: 0 };
   while (total < steps) {
     var g = new BT.Game(L, preset, { seed: seed + gameOvers * 101 });
     var bot = new Bot(g, rng, clumsy);
@@ -245,7 +267,11 @@ function playLevel(L, preset, seed, limitSec, clumsy) {
       g.step(DT);
       total++;
       checkBalls(g, report);
-      if (g.state === 'won') return { won: true, time: total * DT, gameOvers: gameOvers, report: report, stars: g.result.stars, lives: g.livesLost };
+      if (g.state === 'won') {
+        if (g.boss && g.boss.id === 'rival') report.rival = { hits: g.boss.s.hits, misses: g.boss.s.misses };
+        report.attempts = g.attempts;
+        return { won: true, time: total * DT, gameOvers: gameOvers, report: report, stars: g.result.stars, lives: g.livesLost };
+      }
       if (g.state === 'lost') { gameOvers++; break; }
     }
   }
@@ -256,35 +282,44 @@ section('Bot playthrough (Normal' + (QUICK ? ', quick' : '') + ')');
 var LIMIT = 600; // game seconds per level, across retries
 var seeds = QUICK ? [1] : [1, 2, 3];
 var t0 = Date.now();
+var RIVAL = { hits: 0, misses: 0 };
 BT.LEVELS.forEach(function (L) {
-  var times = [], go = 0, rep = { speed: 0, outside: 0 }, wins = 0, stars = [];
+  var times = [], go = 0, rep = { speed: 0, outside: 0, inside: 0 }, wins = 0, stars = [], extra = '';
   seeds.forEach(function (sd) {
     var r = playLevel(L, 'normal', sd, LIMIT);
     if (r.won) { wins++; times.push(r.time); stars.push(r.stars); }
-    go += r.gameOvers; rep.speed += r.report.speed; rep.outside += r.report.outside;
+    go += r.gameOvers; rep.speed += r.report.speed; rep.outside += r.report.outside; rep.inside += r.report.inside || 0;
+    if (r.report.rival) {
+      var h = r.report.rival.hits, m = r.report.rival.misses;
+      RIVAL.hits += h; RIVAL.misses += m;
+      extra += ' rival ' + h + '/' + (h + m);
+    }
+    if (L.id === 24) extra += ' tries ' + (r.report.attempts + 1);
   });
   times.sort(function (a, b) { return a - b; });
   var med = times.length ? times[(times.length - 1) >> 1] : NaN;
   console.log('  L' + (L.id < 10 ? ' ' : '') + L.id + ' ' + pad(L.name, 15) + ' cleared ' + wins + '/' + seeds.length +
-    '  median ' + (med === med ? med.toFixed(0) + 's' : '-') + '  game-overs ' + go + '  stars ' + stars.join(',') + '  par ' + L.par);
+    '  median ' + (med === med ? med.toFixed(0) + 's' : '-') + '  game-overs ' + go + '  stars ' + stars.join(',') + '  par ' + L.par +
+    (L.id > 15 ? '  times ' + times.map(function (x) { return x.toFixed(0) + 's'; }).join(' ') : '') + extra);
   ok(wins === seeds.length, 'bot clears level ' + L.id + ' within ' + LIMIT + 's');
+  if (L.id > 15) ok(rep.inside === 0, 'level ' + L.id + ' ball never left inside a solid brick (' + rep.inside + ')');
   ok(rep.speed === 0, 'level ' + L.id + ' ball never exceeds max speed (' + rep.speed + ')');
   ok(rep.outside === 0, 'level ' + L.id + ' ball never leaves the playfield (' + rep.outside + ')');
 });
 
-section('Bot on Easy, World 1');
-BT.LEVELS.filter(function (L) { return L.world === 1; }).forEach(function (L) {
+section('Bot on Easy, Worlds 1 and 4');
+BT.LEVELS.filter(function (L) { return L.world === 1 || L.world === 4; }).forEach(function (L) {
   var r = playLevel(L, 'easy', 5, LIMIT);
-  console.log('  L' + L.id + ' ' + pad(L.name, 15) + (r.won ? ' cleared in ' + r.time.toFixed(0) + 's, lives lost ' + r.lives + ', game-overs ' + r.gameOvers : ' NOT cleared'));
+  console.log('  L' + (L.id < 10 ? ' ' : '') + L.id + ' ' + pad(L.name, 15) + (r.won ? ' cleared in ' + r.time.toFixed(0) + 's, lives lost ' + r.lives + ', game-overs ' + r.gameOvers : ' NOT cleared'));
   ok(r.won, 'bot clears level ' + L.id + ' on Easy');
 });
 
-section('Clumsy bot (slow reactions, poor aim) on Easy, World 1');
-BT.LEVELS.filter(function (L) { return L.world === 1; }).forEach(function (L) {
+section('Clumsy bot (slow reactions, poor aim) on Easy, Worlds 1 and 4');
+BT.LEVELS.filter(function (L) { return L.world === 1 || L.world === 4; }).forEach(function (L) {
   var res = [1, 2, 3].map(function (sd) { return playLevel(L, 'easy', sd, LIMIT, true); });
   var won = res.filter(function (r) { return r.won; }).length;
   var go = res.reduce(function (a, r) { return a + r.gameOvers; }, 0);
-  console.log('  L' + L.id + ' ' + pad(L.name, 15) + ' cleared ' + won + '/3, game-overs ' + go + ', times ' + res.map(function (r) { return r.time.toFixed(0) + 's'; }).join(' '));
+  console.log('  L' + (L.id < 10 ? ' ' : '') + L.id + ' ' + pad(L.name, 15) + ' cleared ' + won + '/3, game-overs ' + go + ', times ' + res.map(function (r) { return r.time.toFixed(0) + 's'; }).join(' '));
   ok(won === 3, 'clumsy bot clears level ' + L.id + ' on Easy');
 });
 section('Clumsy bot on Normal (information only)');
@@ -345,7 +380,289 @@ section('Rules compose');
   }
   ok(movedX && movedY, 'conveyor and squeeze both move the same brick');
   ok(rep.speed === 0 && rep.outside === 0, 'six rules together keep the ball legal');
+
+  // phase-2 rules combined (World 6 and the Level Maker will pair them up)
+  var combos = [
+    { grid: ['.RRRRBBBBRR.', 'S.VVOVV....S', '..BBBBRRRR..', '....VVV.....'], rules: [{ id: 'wrap' }, { id: 'double' }, { id: 'redblue' }, { id: 'overgrown' }, { id: 'lightsout' }] },
+    { grid: ['............', '............', 'rrrrrrrrrrrr', 'oooooooooooo'], rules: [{ id: 'beat' }, { id: 'conveyor', rows: { 2: 40 } }, { id: 'gusts', firstDelay: 0.5 }, { id: 'squeeze', speed: 4 }] },
+    { grid: ['RRRRRRRRRRRR', 'S..........S', '............', '............', '............', '............', '............', '............', '............', '............', '............', '............', '............', '............', '............', '............', '............', '............', 'gggggggggggg', 'BBBBBBBBBBBB'], rules: [{ id: 'brickfall', pieces: 4 }, { id: 'wrap' }, { id: 'redblue' }] },
+    { grid: ['TTTT....TTTT'], rules: [{ id: 'bounces' }, { id: 'double' }, { id: 'wells', planets: [{ x: 180, y: 300, mass: 1 }] }] }
+  ];
+  combos.forEach(function (cb, ci) {
+    var gc = new BT.Game({ id: 960 + ci, grid: cb.grid, rules: cb.rules, capsuleChance: 0.3 }, 'normal', { seed: 5 + ci });
+    var bc = new Bot(gc, BT.mulberry32(77 + ci)), rc = { speed: 0, outside: 0, inside: 0 }, threw = null;
+    try { for (var s2 = 0; s2 < 120 * 60 && gc.state !== 'won' && gc.state !== 'lost'; s2++) { bc.act(DT); gc.step(DT); checkBalls(gc, rc); } } catch (e) { threw = e; }
+    ok(!threw && rc.speed === 0 && rc.outside === 0 && rc.inside === 0, 'phase-2 combo ' + (ci + 1) + ' (' + cb.rules.map(function (q) { return q.id; }).join('+') + ') runs legally' + (threw ? ': ' + threw.message : '') + ' ' + JSON.stringify(rc));
+  });
 })();
+
+// ------------------------------------------------------------------ phase 2 twists
+section('World 4 and 5 twists');
+(function () {
+  var P = BT.Physics;
+  function launched(L, preset, seed) {
+    var g = new BT.Game(L, preset || 'normal', { seed: seed || 1 });
+    g.tap();
+    var b = g.balls[0]; b.stuck = false; b.serve = false;
+    return g;
+  }
+  function park(g, b, x, y, vx, vy) { b.x = x; b.y = y; b.prevX = x; b.prevY = y; b.vx = vx; b.vy = vy; }
+  function overlapsSolid(g, b) {
+    for (var i = 0; i < g.bricks.length; i++) {
+      var k = g.bricks[i];
+      if (k.alive && k.solid && P.circleRect(b.x, b.y, b.r, k.x, k.y, k.w, k.h) > 0.5) return k;
+    }
+    return null;
+  }
+
+  // Lights Out: ball, paddle and every falling capsule are always lit; glow bricks leave a lantern
+  var L16 = BT.levelById(16), g = launched(L16), lo = g.rules[0];
+  g.spawnCapsule(100, 300, 'long', true);
+  var n = lo.mod.collectLights(g, lo), list = lo.s.list, hasBall = false, hasPaddle = false, hasCap = false;
+  for (var i = 0; i < n; i++) {
+    var x = list[i * 4], y = list[i * 4 + 1];
+    if (Math.abs(x - g.balls[0].x) < 0.01 && Math.abs(y - g.balls[0].y) < 0.01 && list[i * 4 + 3] === 1) hasBall = true;
+    if (Math.abs(x - g.paddle.x) < 0.01 && Math.abs(y - g.paddle.y) < 10 && list[i * 4 + 2] >= g.paddle.w / 2) hasPaddle = true;
+    if (Math.abs(x - 100) < 0.01 && Math.abs(y - 300) < 0.01) hasCap = true;
+  }
+  ok(hasBall && hasPaddle && hasCap, 'Lights Out: ball, paddle and falling capsules are always lit');
+  var glow = g.bricks.filter(function (b) { return b.type === 'glow'; })[0];
+  g.destroyBrick(glow, 'test');
+  var n2 = lo.mod.collectLights(g, lo), big = false;
+  for (i = 0; i < n2; i++) if (list[i * 4 + 2] >= C.rules.lightsout.lanternLight * 0.9) big = true;
+  ok(big, 'Lights Out: a broken glow brick leaves a lantern');
+
+  // Red / Blue: a brick never turns solid on top of the ball
+  var L17 = BT.levelById(17);
+  g = launched(L17);
+  var blue = g.bricks.filter(function (b) { return b.group === 'blue' && !b.solid; })[0];
+  var sw = g.bricks.filter(function (b) { return b.type === 'switch'; })[0];
+  var ball = g.balls[0];
+  park(g, ball, blue.x + blue.w / 2, blue.y + blue.h / 2, 0, 0.0001);
+  g.hitBrick(sw, null, 'test'); // swap: blue should be solid now
+  var held = 0;
+  for (i = 0; i < 30; i++) { park(g, ball, blue.x + blue.w / 2, blue.y + blue.h / 2, 30, 40); g.balls[0].boost = 1; g.step(DT); park(g, ball, blue.x + blue.w / 2, blue.y + blue.h / 2, 30, 40); if (!blue.solid && blue.pending) held++; }
+  ok(held === 30, 'Red/Blue: a brick waits (pending) while the ball is inside it (' + held + '/30)');
+  park(g, ball, 180, 520, 0, 300);
+  g.step(DT); g.step(DT);
+  ok(blue.solid && !blue.pending, 'Red/Blue: it turns solid once the ball has moved away');
+  var other = g.bricks.filter(function (b) { return b.group === 'blue' && b !== blue && b.alive; })[0];
+  ok(other.solid, 'Red/Blue: the switch made the other colour solid');
+
+  // On the Beat: same rule for the pulse
+  var L18 = BT.levelById(18);
+  g = launched(L18);
+  var beat = g.rules[0], ghostB = g.bricks.filter(function (b) { return b.beat === 1; })[0];
+  ball = g.balls[0];
+  var half = beat.mod.period(g, beat) / 2, stuckSolid = 0, flipped = false;
+  for (i = 0; i < Math.ceil(half * 1.5 / DT); i++) {
+    park(g, ball, ghostB.x + ghostB.w / 2, ghostB.y + ghostB.h / 2, 30, -40);
+    g.step(DT);
+    if (beat.s.active === 1) flipped = true;
+    if (ghostB.solid && P.circleRect(ball.x, ball.y, ball.r, ghostB.x, ghostB.y, ghostB.w, ghostB.h) > 0.5) stuckSolid++;
+  }
+  ok(flipped && stuckSolid === 0 && ghostB.pending, 'On the Beat: a brick never turns solid on the ball (waits instead)');
+  park(g, ball, 180, 520, 0, 300); g.step(DT); g.step(DT);
+  ok(ghostB.solid, 'On the Beat: and turns solid when the ball has gone');
+  // warning before it turns solid
+  g = new BT.Game(L18, 'normal', { seed: 1 });
+  var warned = false; beat = g.rules[0];
+  for (i = 0; i < Math.ceil(half / DT) - 2; i++) { g.step(DT); }
+  g.bricks.forEach(function (b) { if (b.beat === 1 && b.warn > 0.5) warned = true; });
+  ok(warned, 'On the Beat: bricks about to turn solid show a warning first');
+
+  // Overgrown: regrowth is slow, never onto a ball, and killing a root withers its vines
+  var L19 = BT.levelById(19);
+  g = launched(L19);
+  var og = g.rules[0], vines0 = g.bricks.filter(function (b) { return b.alive && b.type === 'vine'; }).length;
+  ball = g.balls[0];
+  for (i = 0; i < 120 * 30; i++) { park(g, ball, 180, 560, 0, -300); g.step(DT); }
+  var vines1 = g.bricks.filter(function (b) { return b.alive && b.type === 'vine'; }).length;
+  var maxGrow = og.s.roots.length * Math.ceil(30 / C.rules.overgrown.growEvery);
+  ok(vines1 > vines0 && vines1 - vines0 <= maxGrow, 'Overgrown: vines regrow, at most one per root every ' + C.rules.overgrown.growEvery + 's (' + vines0 + ' -> ' + vines1 + ')');
+  g = launched(L19); og = g.rules[0]; ball = g.balls[0];
+  g.sinceLaunch = 2; og.s.timer = 0.001;
+  park(g, ball, 180, 560, 0, -300);
+  g.step(DT);
+  var sp = og.s.sprouts[0], gr = C.grid;
+  var sx = sp.col * gr.cellW + 15, sy = gr.top + sp.row * gr.cellH + 8, grewOnBall = false;
+  for (i = 0; i < 120 * 3; i++) {
+    park(g, ball, sx, sy, 40, 40); g.step(DT); park(g, ball, sx, sy, 40, 40);
+    if (overlapsSolid(g, ball)) grewOnBall = true;
+  }
+  ok(!grewOnBall && og.s.sprouts.length > 0, 'Overgrown: a shoot never grows into a vine on top of the ball');
+  park(g, ball, 180, 560, 0, -300);
+  for (i = 0; i < 10; i++) g.step(DT);
+  ok(og.s.sprouts.indexOf(sp) < 0, 'Overgrown: it grows once the ball has gone');
+  var root = og.s.roots[0], mine = g.bricks.filter(function (b) { return b.alive && b.type === 'vine' && b.root === root; }).length;
+  g.destroyBrick(root, 'test');
+  for (i = 0; i < 120 * 2; i++) { park(g, ball, 180, 560, 0, -300); g.step(DT); }
+  var left = g.bricks.filter(function (b) { return b.alive && b.type === 'vine' && b.root === root; }).length;
+  ok(mine > 0 && left === 0, 'Overgrown: killing a root withers all ' + mine + ' of its vines');
+
+  // Lighthouse: only bricks in the beam are solid, and the beam never solidifies a brick on the ball
+  var L20 = BT.levelById(20);
+  g = launched(L20); ball = g.balls[0];
+  var lh = g.boss, solidN = 0, ghostN = 0;
+  g.step(DT);
+  var wrongLit = 0, half20 = C.bosses.lighthouse.beamHalfDeg * P.DEG;
+  lh.s.ring.forEach(function (b) {
+    var inBeam = lh.mod.beamDist(lh, b.ang) <= half20 + b.angHalf;
+    if (b.solid) solidN++; else ghostN++;
+    if (b.solid !== inBeam) wrongLit++;
+  });
+  ok(solidN > 0 && ghostN > 0 && wrongLit === 0, 'Lighthouse: bricks are solid exactly when inside the beam (' + solidN + ' solid, ' + ghostN + ' ghost)');
+  var bad = 0;
+  for (i = 0; i < 120 * 12; i++) {
+    var tgt = lh.s.ring[(i / 120 | 0) % lh.s.ring.length];
+    park(g, ball, tgt.x + tgt.w / 2, tgt.y + tgt.h / 2, 30, 40);
+    g.step(DT);
+    if (tgt.solid && P.circleRect(ball.x, ball.y, ball.r, tgt.x, tgt.y, tgt.w, tgt.h) > 0.5) bad++;
+    park(g, ball, tgt.x + tgt.w / 2, tgt.y + tgt.h / 2, 30, 40);
+  }
+  ok(bad === 0, 'Lighthouse: the beam never makes a brick solid on top of the ball');
+
+  // Double Trouble: the top is an exit (costs a life on Normal); Easy has a top safety net too
+  var L21 = BT.levelById(21);
+  g = launched(L21); ball = g.balls[0];
+  g.xpaddles[0].off = true;
+  park(g, ball, 30, 200, 0, -400);
+  for (i = 0; i < 120 && g.state === 'play'; i++) { g.step(DT); if (g.balls[0]) g.balls[0].x = 30; }
+  ok(g.lives === 2 && g.state === 'serve', 'Double Trouble: a ball out of the top costs a life');
+  g = launched(L21, 'easy'); ball = g.balls[0];
+  g.xpaddles[0].off = true;
+  park(g, ball, 30, 200, 0, -300);
+  var savedTop = false;
+  for (i = 0; i < 120 && g.state === 'play'; i++) { g.step(DT); if (g.balls[0]) { g.balls[0].x = 30; if (g.balls[0].vy > 0) { savedTop = true; break; } } }
+  ok(savedTop && g.lives === 5, 'Double Trouble: on Easy a top net saves the ball once');
+  g = launched(L21); ball = g.balls[0];
+  var q = g.xpaddles[0];
+  g.pointTo(120); for (i = 0; i < 30; i++) g.step(DT);
+  park(g, ball, q.x + 10, 150, 0, -350);
+  var bounced = false;
+  for (i = 0; i < 120 && g.balls.length; i++) { g.step(DT); if (g.balls[0].vy > 0) { bounced = true; break; } }
+  ok(bounced && Math.abs(q.x - g.paddle.x) <= C.rules.double.assist + 0.5, 'Double Trouble: the top paddle follows yours and bats the ball back down');
+
+  // Wraparound: ball and paddle wrap; a brick across the seam is hit by the ball's other half
+  var L22 = BT.levelById(22);
+  g = launched(L22); ball = g.balls[0];
+  park(g, ball, 4, 450, -300, -60);
+  for (i = 0; i < 4; i++) g.step(DT);
+  ok(g.balls[0].x > C.W - 10 && g.balls[0].vx < 0, 'Wraparound: the ball leaves the left edge and appears on the right');
+  g.dragBy(-200); for (i = 0; i < 20; i++) g.step(DT);
+  ok(g.paddle.x > C.W / 2 && g.paddle.x < C.W, 'Wraparound: dragging off the left edge brings the paddle in from the right (' + g.paddle.x.toFixed(0) + ')');
+  var g2 = new BT.Game({ id: 950, grid: [], rules: [{ id: 'wrap' }] }, 'normal', { seed: 1 });
+  g2.tap(); var wb = g2.balls[0];
+  var seamBrick = g2.addBrick(BT.Bricks.fromChar('r', C.W - 29, 300, 28, 14)); g2.finalizeBricks();
+  park(g2, wb, 3, 330, 0, -300);
+  for (i = 0; i < 30; i++) g2.step(DT);
+  ok(!seamBrick.alive, 'Wraparound: a ball straddling the edge hits a brick on the other side');
+  var wr = { speed: 0, outside: 0 };
+  var g3 = launched(L22, 'normal', 4), bot3 = new Bot(g3, BT.mulberry32(4));
+  for (i = 0; i < 120 * 60; i++) { bot3.act(DT); g3.step(DT); checkBalls(g3, wr); }
+  ok(wr.outside === 0 && wr.speed === 0, 'Wraparound: ball stays within the wrapped field');
+
+  // Brickfall: pieces are telegraphed, never move into the ball, and the stack never has holes
+  var L23 = BT.levelById(23);
+  g = launched(L23); var bf = g.rules[0];
+  var sawNext = 0, spawned = 0, prevLeft = bf.s.left, holes = 0, crush = 0, warnOk = true, nextSince = 0;
+  var bot = new Bot(g, BT.mulberry32(23));
+  for (i = 0; i < 120 * 90 && g.state !== 'won'; i++) {
+    bot.act(DT);
+    var nextBefore = bf.s.next;
+    g.step(DT);
+    if (bf.s.next === nextBefore && g.state === 'play') nextSince += DT;
+    if (bf.s.left < prevLeft) { spawned++; if (nextSince < C.rules.brickfall.telegraph * 0.9) warnOk = false; nextSince = 0; prevLeft = bf.s.left; }
+    if (i % 30 === 0) { // every column is a solid run resting on the floor
+      for (var c = 0; c < C.grid.cols; c++) {
+        var col = bf.s.cols[c].filter(function (b) { return b.alive && !b.piece; }).sort(function (a, b) { return b.sy - a.sy; });
+        var expect = bf.s.floorY - C.grid.cellH;
+        for (var k = 0; k < col.length; k++) { if (col[k].sy < expect - C.grid.cellH * 0.5 && k === 0) holes += 0; expect = col[k].sy - C.grid.cellH; }
+      }
+    }
+    for (var bi = 0; bi < g.balls.length; bi++) if (overlapsSolid(g, g.balls[bi])) crush++;
+  }
+  ok(spawned >= 3 && warnOk, 'Brickfall: each piece is shown for at least ' + C.rules.brickfall.telegraph + 's before it drops (' + spawned + ' pieces)');
+  ok(crush === 0, 'Brickfall: falling and settling bricks never move into the ball (' + crush + ')');
+  // forced: a piece falling straight onto a ball parked under it waits
+  g = launched(L23); bf = g.rules[0]; ball = g.balls[0];
+  bf.s.timer = 0.001; g.step(DT);
+  var pc = bf.s.pieces[0], low = pc.bricks.reduce(function (a, b) { return b.sy > a.sy ? b : a; });
+  for (i = 0; i < 120 * 3; i++) { park(g, ball, low.x + 14, low.y + 30, 50, 50); g.step(DT); }
+  var gap = (ball.y - ball.r) - (low.y + low.h);
+  ok(gap > 0 && pc.bricks.every(function (b) { return b.piece === pc; }), 'Brickfall: a piece stops above a ball in its way (gap ' + gap.toFixed(1) + 'px)');
+  park(g, ball, 180, 560, 0, -300);
+  // stack: no holes after lots of play
+  g = launched(L23, 'normal', 7); bf = g.rules[0]; bot = new Bot(g, BT.mulberry32(7));
+  for (i = 0; i < 120 * 70 && g.state === 'play'; i++) { bot.act(DT); g.step(DT); }
+  for (i = 0; i < 120; i++) g.step(DT); // let everything settle
+  bf.mod.rebuildCols(g, bf);
+  for (c = 0; c < C.grid.cols; c++) {
+    var support = bf.s.floorY;
+    bf.s.cols[c].forEach(function (b) { if (!b.piece) { if (Math.abs(b.sy - (support - C.grid.cellH)) > 0.5) holes++; support = b.sy; } else support = b.sy; });
+  }
+  ok(holes === 0, 'Brickfall: settled stack has no holes or overhangs (' + holes + ')');
+  ok(!new BT.Game(L23, 'normal', { seed: 1 }).isCleared(), 'Brickfall: not cleared while pieces are still to come');
+
+  // Twelve Bounces: a miss restarts the puzzle with no life lost; 12 bounces then the paddle switches off
+  var L24 = BT.levelById(24);
+  g = launched(L24); ball = g.balls[0];
+  var req0 = g.requiredLeft();
+  g.bricks.filter(function (b) { return b.type === 'normal'; }).slice(0, 5).forEach(function (b) { g.destroyBrick(b, 'test'); });
+  g.pointTo(330);
+  park(g, ball, 30, 500, 0, 300);
+  for (i = 0; i < 120 * 2 && g.attempts === 0; i++) { g.step(DT); if (g.balls[0]) g.balls[0].x = 30; }
+  ok(g.attempts === 1 && g.lives === C.presets.normal.lives && g.livesLost === 0 && g.requiredLeft() === req0 && g.state === 'serve',
+    'Twelve Bounces: a miss restarts the puzzle in under a second, bricks back, no life lost');
+  var bnc = g.rules[0];
+  g.tap();
+  for (i = 0; i < 12; i++) g.paddleBounce(g.balls[0]);
+  ok(bnc.s.left === 0 && g.paddle.off, 'Twelve Bounces: after 12 bounces the paddle switches off');
+  // solvable with bounces to spare: a greedy search over where on the paddle each bounce lands
+  var sol = solveBounces(L24);
+  console.log('    greedy solver clears Twelve Bounces in ' + sol + ' bounces');
+  ok(sol > 0 && sol <= 8, 'Twelve Bounces: solvable with bounces to spare (' + sol + ' of 12)');
+
+  // The Rival: it returns some shots and misses others (beatable, not perfect)
+  ok(RIVAL.hits > 0 && RIVAL.misses > 0 && RIVAL.hits / (RIVAL.hits + RIVAL.misses) < 0.75,
+    'The Rival: bats back ' + RIVAL.hits + ' of ' + (RIVAL.hits + RIVAL.misses) + ' shots in the bot runs (not perfect)');
+})();
+
+// Greedy solver for Twelve Bounces: for each bounce try 13 landing points on the paddle, keep the one that
+// leaves the fewest bricks, replaying from the start each time (the game is deterministic for a seed).
+function solveBounces(L) {
+  var offs = [], k;
+  for (k = -6; k <= 6; k++) offs.push(k / 6 * 0.85);
+  function run(seq) {
+    var g = new BT.Game(L, 'normal', { seed: 11 });
+    g.tap();
+    var used = 0;
+    for (var s = 0; s < 120 * 60; s++) {
+      var b = g.balls[0];
+      if (!b || g.attempts > 0) return { left: 999, won: false };
+      used = C.rules.bounces.count - g.rules[0].s.left;
+      if (b.vy > 0) {
+        if (used >= seq.length && b.y > 480 && !g.blasts.length) break;
+        var lx = BT.Physics.predictLandingX(b.x, b.y, b.vx, b.vy, g.paddle.y - g.paddle.h / 2 - b.r, b.r, C.W - b.r);
+        g.pointTo(lx - (seq[used] || 0) * g.paddle.w / 2);
+      }
+      g.step(DT);
+      if (g.state === 'clearing' || g.state === 'won') return { left: 0, won: true, used: used };
+    }
+    return { left: g.requiredLeft(), won: false };
+  }
+  var seq = [];
+  for (var n = 0; n < C.rules.bounces.count; n++) {
+    var best = null, bestLeft = 1e9;
+    for (k = 0; k < offs.length; k++) {
+      var r = run(seq.concat([offs[k]]));
+      if (r.won) return n + 1;
+      if (r.left < bestLeft) { bestLeft = r.left; best = offs[k]; }
+    }
+    seq.push(best);
+  }
+  return -1;
+}
 
 // ------------------------------------------------------------------ save
 section('Save data');
@@ -366,6 +683,15 @@ section('Save data');
   ok(S.levelInfo(4).stars === 2 && S.levelInfo(1).stars === 3, 'migrated save round-trips');
   S.record(4, 1, 100);
   ok(S.levelInfo(4).stars === 2 && S.levelInfo(4).best === 500, 'record keeps the best stars and score');
+  // a phase-1 player who has finished World 3 carries straight on into World 4 with stars untouched
+  var p1 = { v: 2, progress: {}, difficulty: 'normal', muted: false, seen: { capsules: true } };
+  for (var li = 1; li <= 15; li++) p1.progress[li] = { stars: (li % 3) + 1, best: li * 100, cleared: true };
+  var st2 = new MemStore(); st2.m[C.saveKey] = JSON.stringify(p1);
+  S.init(st2);
+  ok(S.isUnlocked(16) && !S.isUnlocked(17) && S.levelInfo(7).stars === 2 && S.levelInfo(15).best === 1500 && S.totalStars() === 30,
+    'phase-1 save: level 16 unlocks after 15, 17 stays locked, stars and scores untouched');
+  S.record(16, 3, 900);
+  ok(S.isUnlocked(17) && !S.isUnlocked(18) && S.levelInfo(16).stars === 3, 'clearing 16 unlocks 17 (in order)');
 
   var bad = { getItem: function () { throw new Error('denied'); }, setItem: function () { throw new Error('denied'); } };
   var threw = false;

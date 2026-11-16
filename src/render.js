@@ -105,8 +105,56 @@
     return c;
   }
 
+  // Offscreen layers at playfield resolution (rules use them, e.g. the Lights Out darkness) and a soft light sprite.
+  var layers = {}, lightSpr = null;
+  R.layer = function (name) {
+    var L = layers[name];
+    if (!L) { var c = makeCanvas(C.W, C.H); L = layers[name] = { canvas: c, ctx: c.getContext('2d') }; }
+    return L;
+  };
+  R.lightSprite = function () {
+    if (lightSpr) return lightSpr;
+    var s = 128, c = makeCanvas(s, s), x = c.getContext('2d');
+    var grd = x.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+    grd.addColorStop(0, 'rgba(255,255,255,1)'); grd.addColorStop(0.45, 'rgba(255,255,255,0.9)');
+    grd.addColorStop(0.75, 'rgba(255,255,255,0.4)'); grd.addColorStop(1, 'rgba(255,255,255,0)');
+    x.fillStyle = grd; x.fillRect(0, 0, s, s);
+    lightSpr = c;
+    return c;
+  };
+
   // ---------------- bricks ----------------
+  // Small shape mark in the middle of a brick (so groups never rely on colour alone).
+  function drawMark(ctx, b, cx, cy, col) {
+    ctx.fillStyle = col;
+    if (b.mark === 'dot') { ctx.beginPath(); ctx.arc(cx, cy, 3, 0, TAU); ctx.fill(); }
+    else if (b.mark === 'square') ctx.fillRect(cx - 3, cy - 3, 6, 6);
+  }
+
+  // A brick that is see-through (or fading): faint fill, dashed outline. b.warn pulses a white outline just
+  // before it turns solid; b.pending flickers while it waits for a ball to move out of the way.
+  function drawGhost(ctx, b, t, gh) {
+    var x = b.x, y = b.y, w = b.w, h = b.h;
+    ctx.globalAlpha = 1 - 0.85 * gh;
+    roundRect(ctx, x, y, w, h, 3);
+    ctx.fillStyle = b.color; ctx.fill();
+    ctx.globalAlpha = 0.45 + 0.55 * gh;
+    ctx.setLineDash([4, 3]);
+    ctx.lineWidth = 1.5; ctx.strokeStyle = b.color;
+    roundRect(ctx, x + 0.75, y + 0.75, w - 1.5, h - 1.5, 3); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+    if (b.mark) drawMark(ctx, b, x + w / 2, y + h / 2, b.color);
+    var wa = b.pending ? 0.5 + 0.5 * Math.sin(t * 40) : (b.warn > 0 ? b.warn * (0.55 + 0.45 * Math.sin(t * 26)) : 0);
+    if (wa > 0) {
+      ctx.strokeStyle = 'rgba(255,255,255,' + Math.min(1, wa).toFixed(3) + ')'; ctx.lineWidth = 2;
+      roundRect(ctx, x - 0.5, y - 0.5, w + 1, h + 1, 3.5); ctx.stroke();
+    }
+  }
+
   function drawBrick(ctx, b, t) {
+    var gh = b.ghost || 0;
+    if (gh > 0.04) { drawGhost(ctx, b, t, gh); return; }
     var x = b.x, y = b.y, w = b.w, h = b.h;
     if (b.shake > 0) { b.shake -= 1 / 60; x += Math.sin(t * 90) * 1.2; }
     roundRect(ctx, x, y, w, h, 3);
@@ -165,6 +213,46 @@
         ctx.beginPath(); ctx.moveTo(cx, y + 2); ctx.lineTo(cx - 6, cy + 1); ctx.lineTo(cx - 2, cy + 1); ctx.lineTo(cx - 2, y + h - 2);
         ctx.lineTo(cx + 2, y + h - 2); ctx.lineTo(cx + 2, cy + 1); ctx.lineTo(cx + 6, cy + 1); ctx.closePath(); ctx.fill();
         break;
+      case 'glow': // a little sun
+        var gp = 0.5 + 0.5 * Math.sin(t * 4 + x);
+        ctx.fillStyle = '#8a5a00';
+        ctx.beginPath(); ctx.arc(cx, cy, 3, 0, TAU); ctx.fill();
+        ctx.strokeStyle = '#8a5a00'; ctx.lineWidth = 1.3;
+        ctx.beginPath();
+        for (var ri = 0; ri < 6; ri++) { var ra = ri * TAU / 6 + t; ctx.moveTo(cx + Math.cos(ra) * 4.5, cy + Math.sin(ra) * 4.5); ctx.lineTo(cx + Math.cos(ra) * 6.5, cy + Math.sin(ra) * 6.5); }
+        ctx.stroke();
+        ctx.strokeStyle = 'rgba(255,240,170,' + (0.4 + 0.5 * gp).toFixed(3) + ')'; ctx.lineWidth = 2;
+        roundRect(ctx, x - 1.5, y - 1.5, w + 3, h + 3, 4.5); ctx.stroke();
+        break;
+      case 'switch': // half red, half blue, with swap arrows; the solid colour's half is outlined
+        var redOn = b.showing !== 'blue';
+        ctx.save(); roundRect(ctx, x, y, w, h, 3); ctx.clip();
+        ctx.fillStyle = BT.Bricks.RED_COLOR; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + w, y); ctx.lineTo(x, y + h); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = BT.Bricks.BLUE_COLOR; ctx.beginPath(); ctx.moveTo(x + w, y); ctx.lineTo(x + w, y + h); ctx.lineTo(x, y + h); ctx.closePath(); ctx.fill();
+        ctx.restore();
+        ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(cx - 7, cy - 2); ctx.lineTo(cx + 6, cy - 2); ctx.lineTo(cx + 3, cy - 5);
+        ctx.moveTo(cx + 7, cy + 2); ctx.lineTo(cx - 6, cy + 2); ctx.lineTo(cx - 3, cy + 5); ctx.stroke();
+        ctx.strokeStyle = redOn ? '#ffb0b8' : '#b0ccff'; ctx.lineWidth = 2;
+        roundRect(ctx, x - 1, y - 1, w + 2, h + 2, 4); ctx.stroke();
+        break;
+      case 'vine':
+        ctx.fillStyle = b.withering ? 'rgba(120,90,40,0.8)' : '#1d7a3a';
+        ctx.beginPath(); ctx.ellipse(cx - 5, cy, 4.5, 2.2, -0.5, 0, TAU); ctx.fill();
+        ctx.beginPath(); ctx.ellipse(cx + 5, cy, 4.5, 2.2, 0.5, 0, TAU); ctx.fill();
+        ctx.fillRect(cx - 0.75, cy - 4, 1.5, 8);
+        break;
+      case 'root':
+        ctx.strokeStyle = '#3d2410'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(cx, y + 2); ctx.lineTo(cx, cy + 1); ctx.lineTo(cx - 7, y + h - 2);
+        ctx.moveTo(cx, cy + 1); ctx.lineTo(cx + 7, y + h - 2); ctx.moveTo(cx, cy + 1); ctx.lineTo(cx, y + h - 1); ctx.stroke();
+        ctx.fillStyle = '#ffe0b0';
+        for (var hi = 0; hi < b.hp; hi++) { ctx.beginPath(); ctx.arc(x + 5 + hi * 4, y + 4, 1.4, 0, TAU); ctx.fill(); }
+        if (b.hp < b.maxHp) {
+          ctx.strokeStyle = 'rgba(20,10,0,0.8)'; ctx.lineWidth = 1.2;
+          ctx.beginPath(); ctx.moveTo(x + w - 4, y + 2); ctx.lineTo(x + w - 9, cy); ctx.lineTo(x + w - 6, y + h - 2); ctx.stroke();
+        }
+        break;
       case 'core':
         var pu = 0.5 + 0.5 * Math.sin(t * 6);
         ctx.strokeStyle = 'rgba(255,255,255,' + (0.5 + 0.5 * pu).toFixed(3) + ')'; ctx.lineWidth = 2;
@@ -173,11 +261,17 @@
         for (var j = 0; j < b.hp; j++) { ctx.beginPath(); ctx.arc(cx - (b.hp - 1) * 3 + j * 6, y + h - 4, 1.6, 0, TAU); ctx.fill(); }
         break;
     }
+    if (b.mark) drawMark(ctx, b, cx, cy + 0.5, 'rgba(10,12,30,0.45)');
+    if (b.ghostable) { // solid and switchable: crisp bright outline, the opposite of the ghost's dashed one
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 1.5;
+      roundRect(ctx, x + 0.75, y + 0.75, w - 1.5, h - 1.5, 3); ctx.stroke();
+    }
     if (b.flash > 0) {
       ctx.fillStyle = 'rgba(255,255,255,' + Math.min(0.85, b.flash * 7).toFixed(3) + ')';
       roundRect(ctx, x, y, w, h, 3); ctx.fill();
     }
   }
+  R.drawBrick = drawBrick;
 
   function drawBricks(ctx, g) {
     var bs = g.bricks, t = g.t;
@@ -197,6 +291,11 @@
   var paddleGrads = {};
   function drawPaddle(ctx, g) {
     var p = g.paddle, e = g.eff;
+    if (p.off) { // switched off (e.g. out of bounces): a faint dashed outline the ball falls through
+      ctx.setLineDash([5, 4]); ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 1.5;
+      roundRect(ctx, p.x - p.w / 2, p.y - p.h / 2, p.w, p.h, p.h / 2); ctx.stroke(); ctx.setLineDash([]);
+      return;
+    }
     var sq = p.squash > 0 ? p.squash / C.paddle.squashTime : 0;
     var w = p.w * (1 + 0.08 * sq), h = p.h * (1 - 0.35 * sq);
     var x = p.x - w / 2, y = p.y - h / 2 + (p.h - h) / 2;
@@ -254,6 +353,35 @@
         ctx.beginPath(); ctx.arc(b.x - 1.8, b.y - 1.8, b.r * 0.35, 0, TAU); ctx.fill();
       }
     }
+  }
+
+  // Extra paddles (mirror paddle at the top, computer rival). Same look as yours, in their own colour.
+  var xpGrads = {};
+  function drawXPaddle(ctx, g, q) {
+    if (q.off) return;
+    var sq = q.squash > 0 ? q.squash / C.paddle.squashTime : 0;
+    var w = q.w * (1 + 0.08 * sq), h = q.h * (1 - 0.35 * sq);
+    var x = q.x - w / 2, y = q.y - h / 2;
+    ctx.fillStyle = 'rgba(255,255,255,0.10)';
+    roundRect(ctx, x - 4, y - 4, w + 8, h + 8, (h + 8) / 2); ctx.fill();
+    var key = q.color + '@' + q.y, grd = xpGrads[key];
+    if (!grd) {
+      grd = xpGrads[key] = ctx.createLinearGradient(0, q.y + q.h / 2, 0, q.y - q.h / 2); // lit from below: it faces down
+      grd.addColorStop(0, '#ffffff'); grd.addColorStop(0.35, q.color); grd.addColorStop(1, '#4a1f1f');
+    }
+    ctx.fillStyle = q.hitFlash > 0 ? '#ffffff' : grd;
+    roundRect(ctx, x, y, w, h, h / 2); ctx.fill();
+    if (q.kind === 'mirror') { // small chevrons: "copies you"
+      ctx.strokeStyle = 'rgba(60,30,0,0.6)'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(q.x - 4, q.y - 2); ctx.lineTo(q.x, q.y + 2); ctx.lineTo(q.x + 4, q.y - 2); ctx.stroke();
+    }
+  }
+
+  // Draw fn at x, plus copies one playfield-width either side when the field wraps (seamless edges).
+  function wrapDraw(ctx, g, fn, a) {
+    fn(ctx, g, a);
+    if (!g.wrapX) return;
+    ctx.save(); ctx.translate(C.W, 0); fn(ctx, g, a); ctx.translate(-2 * C.W, 0); fn(ctx, g, a); ctx.restore();
   }
 
   function drawCapsule(ctx, type, x, y, t, scale) {
@@ -334,11 +462,14 @@
       ctx.save();
       if (g.shakeAmt > 0) ctx.translate((Math.random() - 0.5) * g.shakeAmt * 2, (Math.random() - 0.5) * g.shakeAmt * 2);
       // walls
-      ctx.fillStyle = 'rgba(120,160,255,0.18)';
-      ctx.fillRect(0, C.TOP, 2, C.H - C.TOP); ctx.fillRect(C.W - 2, C.TOP, 2, C.H - C.TOP);
+      if (!g.wrapX) {
+        ctx.fillStyle = 'rgba(120,160,255,0.18)';
+        ctx.fillRect(0, C.TOP, 2, C.H - C.TOP); ctx.fillRect(C.W - 2, C.TOP, 2, C.H - C.TOP);
+      }
       var i, r;
       for (i = 0; i < g.rules.length; i++) { r = g.rules[i]; if (r.mod.render) r.mod.render(ctx, g, r, 'back', R); }
       drawBricks(ctx, g);
+      for (i = 0; i < g.rules.length; i++) { r = g.rules[i]; if (r.mod.renderOverBricks) r.mod.renderOverBricks(ctx, g, r, R); }
       // capsules
       for (i = 0; i < g.capsules.length; i++) {
         var c = g.capsules[i];
@@ -352,11 +483,12 @@
         ctx.fillStyle = 'rgba(124,245,255,' + na.toFixed(3) + ')';
         ctx.fillRect(0, C.net.y, C.W, 2);
       }
-      drawPaddle(ctx, g);
+      wrapDraw(ctx, g, drawPaddle);
+      for (i = 0; i < g.xpaddles.length; i++) wrapDraw(ctx, g, drawXPaddle, g.xpaddles[i]);
       // lasers
       ctx.fillStyle = '#ffb36b';
       for (i = 0; i < g.lasers.length; i++) { var L = g.lasers[i]; if (L.alive) ctx.fillRect(L.x - 1.5, L.y - 8, 3, 12); }
-      drawBalls(ctx, g);
+      wrapDraw(ctx, g, drawBalls);
       BT.Particles.draw(ctx);
       for (i = 0; i < g.rules.length; i++) { r = g.rules[i]; if (r.mod.render) r.mod.render(ctx, g, r, 'front', R); }
       ctx.restore();

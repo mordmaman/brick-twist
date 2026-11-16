@@ -12,6 +12,7 @@ var ROOT = path.join(__dirname, '..');
 var OUT = process.argv[2] || path.join(ROOT, 'tests', 'shots');
 var URL = 'file://' + path.join(ROOT, 'index.html');
 var fails = 0;
+var BT_BOSS_IDS = [20, 25];
 function ok(c, m) { console.log((c ? '  ok   ' : '  FAIL ') + m); if (!c) fails++; }
 
 (async function () {
@@ -91,13 +92,32 @@ function ok(c, m) { console.log((c ? '  ok   ' : '  FAIL ') + m); if (!c) fails+
   await page.waitForTimeout(50);
 
   // every level: start, launch, run 4s with the helper, screenshot
-  for (var id = 1; id <= 15; id++) {
-    await page.evaluate(function (id) { BT.Save.data.seen = {}; BT.App.startLevel(id, true); BT.App.game.tap(); }, id);
+  for (var id = 1; id <= 25; id++) {
+    await page.evaluate(function (id) { BT.Save.data.seen = {}; BT.App.startLevel(id, true); }, id);
+    if (id > 15) { // phase 2: also capture the opening moment, before launch, to check the twist reads safely
+      await page.waitForTimeout(300);
+      await page.screenshot({ path: path.join(OUT, 'level-' + id + '-serve.png') });
+    }
+    await page.evaluate(function () { BT.App.game.tap(); });
     await page.waitForTimeout(id === 12 ? 600 : 4000);
-    var info = await page.evaluate(function () { var g = BT.App.game; return { state: g.state, balls: g.balls.length, t: g.t.toFixed(1) }; });
-    ok(info.state !== 'lost', 'level ' + id + ' runs (state ' + info.state + ', t ' + info.t + ')');
+    var info = await page.evaluate(function () { var g = BT.App.game; return { state: g.state, balls: g.balls.length, t: g.t.toFixed(1), req: g.requiredLeft(), score: g.score }; });
+    ok(info.state !== 'lost', 'level ' + id + ' runs (state ' + info.state + ', t ' + info.t + (id > 15 ? ', score ' + info.score : '') + ')');
+    if (id > 15) ok(info.score > 0 || (BT_BOSS_IDS.indexOf(id) >= 0), 'level ' + id + ' ball reaches something in 4s (score ' + info.score + ')');
     await page.screenshot({ path: path.join(OUT, 'level-' + (id < 10 ? '0' : '') + id + '.png') });
+    if (id > 15) { // and a later moment, for twists that develop over time
+      await page.waitForTimeout(5000);
+      var info2 = await page.evaluate(function () { var g = BT.App.game; return { state: g.state, t: g.t.toFixed(1) }; });
+      ok(info2.state !== 'lost', 'level ' + id + ' still running at t ' + info2.t + ' (state ' + info2.state + ')');
+      await page.screenshot({ path: path.join(OUT, 'level-' + id + '-later.png') });
+    }
   }
+  // first-time banners of the new twists
+  for (id = 16; id <= 25; id++) {
+    var bn = await page.evaluate(function (id) { BT.Save.data.seen = {}; BT.App.startLevel(id); return { overlay: BT.App.overlay, banner: BT.App.level.banner }; }, id);
+    ok(bn.overlay === 'banner' && bn.banner.length > 10, 'level ' + id + ' shows its first-time banner');
+    if (id === 16 || id === 21 || id === 24) await page.screenshot({ path: path.join(OUT, 'banner-' + id + '.png') });
+  }
+  await page.evaluate(function () { BT.App.doAction('dismissBanner'); });
   // results card: force a win on level 3
   await page.evaluate(function () { BT.App.startLevel(3, true); var g = BT.App.game; g.tap(); g.bricks.forEach(function (b) { if (b.required && b.alive) g.destroyBrick(b, 'test'); }); });
   await page.waitForTimeout(2600);
@@ -106,6 +126,29 @@ function ok(c, m) { console.log((c ? '  ok   ' : '  FAIL ') + m); if (!c) fails+
   await page.evaluate(function () { clearInterval(window.__bot); BT.App.toSelect(); });
   await page.waitForTimeout(200);
   await page.screenshot({ path: path.join(OUT, '06-select-after.png') });
+
+  // level select with saved progress through level 15: World 4 opens at 16, 17 stays locked
+  var sel = await page.evaluate(function () {
+    var keep = JSON.stringify(BT.Save.data);
+    for (var i = 1; i <= 15; i++) BT.Save.data.progress[i] = { stars: 2, best: 100, cleared: true };
+    BT.App.toSelect();
+    return { keep: keep, u16: BT.Save.isUnlocked(16), u17: BT.Save.isUnlocked(17), stars: BT.Save.totalStars() };
+  });
+  ok(sel.u16 && !sel.u17 && sel.stars === 30, 'after level 15, level 16 unlocks and 17 stays locked');
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: path.join(OUT, '09-select-world4.png') });
+  var t16 = await pt(48, 158 + 3 * 76 + 14 + 25); // World 4 row, first tile
+  await page.touchscreen.tap(t16.x, t16.y);
+  await page.waitForTimeout(200);
+  var st16 = await page.evaluate(function () { return { scene: BT.App.scene, id: BT.App.level && BT.App.level.id }; });
+  ok(st16.scene === 'play' && st16.id === 16, 'tapping the first World 4 tile starts level 16');
+  await page.evaluate(function () {
+    for (var i = 16; i <= 25; i++) BT.Save.data.progress[i] = { stars: (i % 3) + 1, best: 100, cleared: true };
+    BT.App.toSelect();
+  });
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: path.join(OUT, '10-select-all.png') });
+  await page.evaluate(function (k) { BT.Save.data = JSON.parse(k); BT.Save.write(); }, sel.keep);
 
   ok(errors.length === 0, 'no console errors or warnings' + (errors.length ? ': ' + errors.slice(0, 5).join(' | ') : ''));
   ok(requests.length === 0, 'no network requests' + (requests.length ? ': ' + requests.join(', ') : ''));

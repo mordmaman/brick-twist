@@ -8,8 +8,8 @@
     { n: 1, name: 'Warm-up', tint: '#151b3d', accent: '#ffd35a' },
     { n: 2, name: 'On the move', tint: '#0f2a3a', accent: '#4fd8ff' },
     { n: 3, name: 'Bend the ball', tint: '#25163e', accent: '#c56bff' },
-    { n: 4, name: 'Lights and switches', tint: '#1a1a1a', accent: '#ffcc33', soon: true },
-    { n: 5, name: 'Flip the rules', tint: '#2a1414', accent: '#ff6b6b', soon: true },
+    { n: 4, name: 'Lights and switches', tint: '#1a1a1a', accent: '#ffcc33' },
+    { n: 5, name: 'Flip the rules', tint: '#2a1414', accent: '#ff6b6b' },
     { n: 6, name: 'Mash-ups', tint: '#14261a', accent: '#2ee0a4', soon: true }
   ];
 
@@ -240,6 +240,175 @@
         'p..........p'
       ],
       rules: [{ id: 'magnet', cx: 180, cy: 230, shieldRadius: 64, shield: '2c2c2c2c2c2c' }]
+    },
+
+    // ---------------- World 4: Lights and switches ----------------
+    {
+      id: 16, world: 4, name: 'Lights Out', twist: 'lightsout', par: 75,
+      banner: 'It\'s dark! Hit the glowing bricks to light things up.',
+      grid: [
+        '............',
+        '.cccccccccc.',
+        '.ccGccccGcc.',
+        '.cccccccccc.',
+        '............',
+        'bbbb....bbbb',
+        'bGbb....bbGb',
+        'bbbb....bbbb',
+        '............',
+        '....pppp....',
+        '....pGCp....',
+        '....pppp....'
+      ],
+      rules: [{ id: 'lightsout' }]
+    },
+    {
+      id: 17, world: 4, name: 'Red / Blue', twist: 'redblue', par: 95,
+      banner: 'Only one colour is solid. Hit a switch to swap red and blue!',
+      grid: [
+        '............',
+        '.BBBBBBBBBB.',
+        '.RRRRRRRRRR.',
+        '.BBBBBBBBBB.',
+        '............',
+        'S..........S',
+        '............',
+        '............',
+        '...RRRRRR...'
+      ],
+      rules: [{ id: 'redblue', start: 'red' }]
+    },
+    {
+      id: 18, world: 4, name: 'On the Beat', twist: 'beat', par: 95,
+      banner: 'Bricks fade in and out to the beat. The ball goes through faded ones.',
+      grid: [
+        '............',
+        '............',
+        'mmmmmmmmmmmm',
+        'mmmmmmmmmmmm',
+        'pppppppppppp',
+        'ppppCppppppp',
+        'bbbbbbbbbbbb',
+        'bbbbbbbCbbbb',
+        '............',
+        '..cccccccc..'
+      ],
+      rules: [{ id: 'beat', pattern: 'checker' }]
+    },
+    {
+      id: 19, world: 4, name: 'Overgrown', twist: 'overgrown', par: 115,
+      banner: 'Vines grow back! Smash the brown roots and their vines wither.',
+      grid: [
+        '.VVV....VVV.',
+        '.VOV....VOV.',
+        '.VVV....VVV.',
+        '..V......V..',
+        '............',
+        '....VVVV....',
+        '....VOVV....',
+        '....VVVV....',
+        '.....V......',
+        '............',
+        'C..........C'
+      ],
+      rules: [{ id: 'overgrown' }]
+    },
+    {
+      id: 20, world: 4, name: 'The Lighthouse', twist: 'boss-lighthouse', par: 85, clear: 'boss', boss: true,
+      banner: 'Boss! Bricks are only solid in the light. Hit the lamp in the middle.',
+      grid: [
+        'C..........C'
+      ],
+      rules: [{
+        id: 'lighthouse', cx: 180, cy: 222, startAngle: 0,
+        rings: [
+          { radius: 46, n: 10, ch: 'y', size: 18 },
+          { radius: 80, n: 16, ch: 'o', size: 18, offset: 0.5 },
+          { radius: 114, n: 22, ch: 'r', size: 18 }
+        ]
+      }]
+    },
+
+    // ---------------- World 5: Flip the rules ----------------
+    {
+      id: 21, world: 5, name: 'Double Trouble', twist: 'double', par: 85,
+      banner: 'A second paddle at the top copies yours. Keep the ball in at both ends!',
+      grid: [
+        '............', '............', '............', '............', '............',
+        '............', '............', '............', '............',
+        '..rrrrrrrr..',
+        '.oo.oooo.oo.',
+        'yyyyCyyCyyyy',
+        'gggggggggggg',
+        '.cc.cccc.cc.',
+        '..bbbbbbbb..'
+      ],
+      rules: [{ id: 'double' }]
+    },
+    {
+      id: 22, world: 5, name: 'Wraparound', twist: 'wrap', par: 115,
+      banner: 'No side walls! The ball and your paddle wrap round to the other side.',
+      grid: [
+        '............',
+        'cc........cc',
+        'cc..yyyy..cc',
+        'bb..mCmm..bb',
+        'bb........bb',
+        'pp........pp',
+        'pp##....##pp',
+        '............',
+        '............',
+        'gg........gg'
+      ],
+      rules: [{ id: 'wrap' }]
+    },
+    {
+      id: 23, world: 5, name: 'Brickfall', twist: 'brickfall', par: 125,
+      banner: 'Brick shapes drop in and stack up. Don\'t let the stack reach the red line!',
+      grid: [
+        '............', '............', '............', '............', '............',
+        '............', '............', '............', '............', '............',
+        '............', '............', '............', '............', '............',
+        '............',
+        '............',
+        'y..........y',
+        'oo...CC...oo',
+        'rrr.rrrr.rrr'
+      ],
+      rules: [{ id: 'brickfall' }]
+    },
+    {
+      id: 24, world: 5, name: 'Twelve Bounces', twist: 'bounces', par: 60, capsuleChance: 0,
+      banner: 'Puzzle! Clear it in 12 bounces. Run out and it just starts again.',
+      grid: [
+        'rrr......bbb',
+        'rrr......bbb',
+        'rTr......bTb',
+        '.T........T.',
+        '.T..oooo..T.',
+        '....oooo....',
+        '....oTTo....',
+        '.....TT.....',
+        '............',
+        'gg........gg',
+        'gT###..###Tg',
+        'gT........Tg'
+      ],
+      rules: [{ id: 'bounces' }]
+    },
+    {
+      id: 25, world: 5, name: 'The Rival', twist: 'boss-rival', par: 120, clear: 'boss', boss: true,
+      banner: 'Boss! Your Rival bats the ball back. Sneak past it and smash its core.',
+      grid: [
+        '.rrr....rrr.',
+        '.ooo....ooo.',
+        '...yyyyyy...',
+        '............',
+        '............', '............', '............', '............',
+        '............', '............', '............', '............',
+        'C..........C'
+      ],
+      rules: [{ id: 'rival' }]
     }
   ];
 

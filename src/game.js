@@ -61,8 +61,16 @@
     var pw = this.preset.paddleW;
     this.paddle = {
       x: C.W / 2, y: C.paddle.y, w: pw, h: C.paddle.h, targetX: C.W / 2,
-      prevX: C.W / 2, vx: 0, kv: 0, squash: 0, hitFlash: 0
+      prevX: C.W / 2, vx: 0, kv: 0, squash: 0, hitFlash: 0,
+      off: false              // a rule can switch the paddle off (the ball falls straight through)
     };
+
+    // Engine extension points that rules switch on in init (all off by default):
+    this.xpaddles = [];       // extra paddles, see addXPaddle (mirror paddle at the top, a computer rival)
+    this.wrapX = false;       // no side walls: ball and paddle wrap across the left/right edges
+    this.topOpen = false;     // no top wall: a ball that leaves through the top is lost
+    this.ghosting = false;    // some bricks can turn non-solid (see makeGhostable / resolveSolidity)
+    this.attempts = 0;        // retries of this level without a restart (see retry)
 
     this.buildGrid(level.grid || []);
     this.rules = [];
@@ -155,9 +163,11 @@
   };
   G.pointTo = function (x) {
     this.paddle.targetX = this.eff.flip > 0 ? C.W - x : x;
+    if (this.wrapX) this.paddle.targetX = this.paddle.x + this.wrapDelta(this.paddle.targetX - this.paddle.x);
     this.clampTarget();
   };
   G.clampTarget = function () {
+    if (this.wrapX) return;
     var hw = this.paddle.w / 2 + C.paddle.edgeMargin;
     this.paddle.targetX = P.clamp(this.paddle.targetX, hw, C.W - hw);
   };
@@ -201,6 +211,7 @@
       var L = this.lasers[i];
       if (L.alive) continue;
       L.alive = true; L.x = n === 0 ? p.x - p.w / 2 + 6 : p.x + p.w / 2 - 6; L.y = p.y - p.h / 2;
+      if (this.wrapX) L.x = this.wrapPos(L.x);
       n++;
     }
     this.fx.sound('laser');
@@ -226,6 +237,7 @@
       if (this.state === 'lost') return;
     }
     this.finalizeBricks();
+    if (this.ghosting) this.resolveSolidity(dt);
 
     this.updateBlasts(dt);
     this.updateBalls(dt);
@@ -285,10 +297,18 @@
     this.clampTarget();
     p.prevX = p.x;
     var dx = p.targetX - p.x, maxStep = cp.maxSpeed * dt;
-    p.x += P.clamp(dx, -maxStep, maxStep);
-    var hw = p.w / 2;
-    p.x = P.clamp(p.x, hw, C.W - hw);
-    var inst = (p.x - p.prevX) / dt;
+    var inst;
+    if (this.wrapX) { // no walls: move freely, then wrap position and target together
+      var mv = P.clamp(dx, -maxStep, maxStep);
+      p.x += mv;
+      if (p.x >= C.W) { p.x -= C.W; p.targetX -= C.W; } else if (p.x < 0) { p.x += C.W; p.targetX += C.W; }
+      inst = mv / dt;
+    } else {
+      p.x += P.clamp(dx, -maxStep, maxStep);
+      var hw = p.w / 2;
+      p.x = P.clamp(p.x, hw, C.W - hw);
+      inst = (p.x - p.prevX) / dt;
+    }
     p.vx += (inst - p.vx) * 0.5;
     if (p.squash > 0) p.squash -= dt;
     if (p.hitFlash > 0) p.hitFlash -= dt;
@@ -301,7 +321,7 @@
       var b = balls[i];
       if (b.dead) continue;
       if (b.stuck) {
-        b.x = P.clamp(p.x + b.stuckOffset, b.r, C.W - b.r);
+        b.x = this.wrapX ? this.wrapPos(p.x + b.stuckOffset) : P.clamp(p.x + b.stuckOffset, b.r, C.W - b.r);
         b.y = p.y - p.h / 2 - b.r;
         b.prevX = b.x; b.prevY = b.y;
         if (!b.serve) {
@@ -339,9 +359,12 @@
   };
 
   G.keepInside = function (b) {
-    if (b.x < b.r) { b.x = b.r; if (b.vx < 0) b.vx = -b.vx; }
-    if (b.x > C.W - b.r) { b.x = C.W - b.r; if (b.vx > 0) b.vx = -b.vx; }
-    if (b.y < C.TOP + b.r) { b.y = C.TOP + b.r; if (b.vy < 0) b.vy = -b.vy; }
+    if (this.wrapX) b.x = this.wrapPos(b.x);
+    else {
+      if (b.x < b.r) { b.x = b.r; if (b.vx < 0) b.vx = -b.vx; }
+      if (b.x > C.W - b.r) { b.x = C.W - b.r; if (b.vx > 0) b.vx = -b.vx; }
+    }
+    if (b.y < C.TOP + b.r && !this.topOpen) { b.y = C.TOP + b.r; if (b.vy < 0) b.vy = -b.vy; }
     if (!(b.x === b.x) || !(b.y === b.y)) { // NaN guard
       b.x = this.paddle.x; b.y = 400; b.vx = 0; b.vy = -1; this.normalizeBall(b);
     }
@@ -359,21 +382,28 @@
       b.x += b.vx * sdt; b.y += b.vy * sdt;
 
       // walls
-      if (b.x < b.r) { b.x = b.r; if (b.vx < 0) { b.vx = -b.vx; this.fx.sound('wall'); } }
+      if (this.wrapX) {
+        if (b.x < 0) b.x += C.W; else if (b.x >= C.W) b.x -= C.W;
+      }
+      else if (b.x < b.r) { b.x = b.r; if (b.vx < 0) { b.vx = -b.vx; this.fx.sound('wall'); } }
       else if (b.x > C.W - b.r) { b.x = C.W - b.r; if (b.vx > 0) { b.vx = -b.vx; this.fx.sound('wall'); } }
-      if (b.y < C.TOP + b.r) { b.y = C.TOP + b.r; if (b.vy < 0) { b.vy = -b.vy; this.fx.sound('wall'); } }
+      if (this.topOpen) {
+        if (b.y + b.r < C.TOP) { b.dead = true; b.exitTop = true; return; }
+      }
+      else if (b.y < C.TOP + b.r) { b.y = C.TOP + b.r; if (b.vy < 0) { b.vy = -b.vy; this.fx.sound('wall'); } }
 
       // paddle
-      if (b.vy > 0) {
-        var hw = p.w / 2, ph = p.h / 2;
-        if (P.circleRect(b.x, b.y, b.r, p.x - hw, p.y - ph, p.w, p.h) > 0) {
-          if (b.y <= p.y + 1) this.paddleBounce(b);
+      if (b.vy > 0 && !p.off) {
+        var hw = p.w / 2, ph = p.h / 2, pxx = this.wrapX ? this.wrapNear(p.x, b.x) : p.x;
+        if (P.circleRect(b.x, b.y, b.r, pxx - hw, p.y - ph, p.w, p.h) > 0) {
+          if (b.y <= p.y + 1) this.paddleBounce(b, pxx);
           else { // clipped the side of the paddle: knock sideways, it is on its way out
-            b.x = b.x < p.x ? p.x - hw - b.r : p.x + hw + b.r;
-            b.vx = (b.x < p.x ? -1 : 1) * Math.abs(b.vx);
+            b.x = b.x < pxx ? pxx - hw - b.r : pxx + hw + b.r;
+            b.vx = (b.x < pxx ? -1 : 1) * Math.abs(b.vx);
           }
         }
       }
+      if (this.xpaddles.length) this.xpaddleCollide(b);
 
       // Easy safety net
       if (this.netActive && b.vy > 0 && b.y + b.r >= C.net.y && this.state !== 'clearing') {
@@ -418,14 +448,24 @@
       }
       if (d > bestD) { bestD = d; best = k; bestN.nx = HIT.nx; bestN.ny = HIT.ny; }
     }
+    if (this.wrapX && (x < r || x > C.W - r)) { // the part of the ball showing on the other side
+      var wx = x < r ? x + C.W : x - C.W;
+      for (i = 0; i < bs.length; i++) {
+        k = bs[i];
+        if (!k.alive || !k.solid) continue;
+        d = P.circleRect(wx, y, r, k.x, k.y, k.w, k.h);
+        if (d > bestD) { bestD = d; best = k; bestN.nx = HIT.nx; bestN.ny = HIT.ny; }
+      }
+    }
     if (best) { HIT.nx = bestN.nx; HIT.ny = bestN.ny; HIT.depth = bestD; }
     return best;
   };
 
-  G.paddleBounce = function (b) {
+  G.paddleBounce = function (b, px) {
     var p = this.paddle;
+    if (px === undefined) px = p.x;
     b.y = p.y - p.h / 2 - b.r;
-    var a = P.paddleAngle(b.x, p.x, p.w / 2, p.vx, C.ball);
+    var a = P.paddleAngle(b.x, px, p.w / 2, p.vx, C.ball);
     var s = Math.min(this.speed() * b.boost, C.ball.absMaxSpeed);
     b.vx = Math.sin(a) * s; b.vy = -Math.cos(a) * s;
     p.squash = C.paddle.squashTime;
@@ -437,7 +477,7 @@
     }
     this.fx.sound('paddle', a);
     if (this.eff['catch'] > 0 && this.state === 'play') {
-      b.stuck = true; b.stuckOffset = b.x - p.x; b.stuckTimer = 0;
+      b.stuck = true; b.stuckOffset = b.x - px; b.stuckTimer = 0;
       b.vx = 0; b.vy = 0;
     }
     for (var i = 0; i < this.rules.length; i++) {
@@ -609,7 +649,8 @@
       c.x += (c.vx || 0) * dt;
       c.x = P.clamp(c.x, cw / 2, C.W - cw / 2);
       if (c.y - chh / 2 > C.H) { c.alive = false; continue; }
-      if (Math.abs(c.x - p.x) < (p.w + cw) / 2 && Math.abs(c.y - p.y) < (p.h + chh) / 2) {
+      var cdx = this.wrapX ? this.wrapDelta(c.x - p.x) : c.x - p.x;
+      if (Math.abs(cdx) < (p.w + cw) / 2 && Math.abs(c.y - p.y) < (p.h + chh) / 2) {
         c.alive = false;
         this.applyCapsule(c.type, c.x, c.y);
       }
@@ -687,6 +728,10 @@
   // ---------- lives / win ----------
   G.loseLife = function (reason) {
     if (this.state !== 'play' && this.state !== 'serve') return;
+    for (var q = 0; q < this.rules.length; q++) { // a rule may handle the miss itself (e.g. a free retry)
+      var rq = this.rules[q];
+      if (rq.mod.beforeLifeLost && rq.mod.beforeLifeLost(this, rq, reason)) return;
+    }
     this.lives--;
     this.livesLost++;
     this.combo = 0;
@@ -716,6 +761,10 @@
   G.isCleared = function () {
     var mode = this.level.clear || 'bricks';
     if (mode === 'boss') return !!(this.boss && this.boss.s.defeated);
+    for (var q = 0; q < this.rules.length; q++) { // e.g. more bricks still to arrive
+      var rq = this.rules[q];
+      if (rq.mod.holdClear && rq.mod.holdClear(this, rq)) return false;
+    }
     var bs = this.bricks;
     for (var i = 0; i < bs.length; i++) {
       var k = bs[i];
@@ -741,6 +790,117 @@
     if (this.livesLost === 0) { stars = 2; if (this.clock <= par) stars = 3; }
     this.result = { stars: stars, time: this.clock, par: par, score: this.score, livesLost: this.livesLost };
     this.fx.sound('win');
+  };
+
+  // ---------- engine extension points used by rules ----------
+  // Wrapping helpers (only meaningful when wrapX is on).
+  G.wrapPos = function (x) { x %= C.W; return x < 0 ? x + C.W : x; };
+  G.wrapDelta = function (d) { d = ((d % C.W) + C.W * 1.5) % C.W - C.W / 2; return d; };
+  G.wrapNear = function (x, ref) { return ref + this.wrapDelta(x - ref); };
+
+  // True if any live ball is within margin of the rect: rules use it so a brick never appears,
+  // turns solid, lands or grows on top of a ball.
+  G.ballNear = function (x, y, w, h, margin) {
+    var m = margin || 0;
+    for (var i = 0; i < this.balls.length; i++) {
+      var b = this.balls[i];
+      if (b.dead) continue;
+      var bx = b.x;
+      if (this.wrapX) bx = this.wrapNear(bx, x + w / 2);
+      if (bx + b.r + m > x && bx - b.r - m < x + w && b.y + b.r + m > y && b.y - b.r - m < y + h) return true;
+    }
+    return false;
+  };
+
+  // Ghost bricks. A rule marks bricks ghostable once, then each step sets b.wantGhost = true on the ones it
+  // wants see-through (several rules can vote; any vote makes it a ghost). The engine then applies it:
+  // a brick only turns solid when no ball is touching it (b.pending shows it is waiting), and b.ghost
+  // animates 0 (solid look) .. 1 (ghost look) for the renderer.
+  G.makeGhostable = function (b) {
+    b.ghostable = true; b.wantGhost = false; b.pending = false; b.warn = 0;
+    if (b.ghost == null) b.ghost = b.solid ? 0 : 1;
+    this.ghosting = true;
+  };
+  G.resolveSolidity = function (dt) {
+    var bs = this.bricks, k = Math.min(1, dt * 14);
+    for (var i = 0; i < bs.length; i++) {
+      var b = bs[i];
+      if (!b.ghostable || !b.alive) continue;
+      if (b.wantGhost) { b.solid = false; b.pending = false; }
+      else if (!b.solid) {
+        if (this.ballNear(b.x, b.y, b.w, b.h, 2)) b.pending = true;
+        else { b.solid = true; b.pending = false; }
+      }
+      b.ghost += ((b.solid ? 0 : 1) - b.ghost) * k;
+      b.wantGhost = false;
+    }
+  };
+
+  // Extra paddles. face: +1 bounces the ball downward (paddle at the top), -1 upward. They are one-way:
+  // only a ball travelling towards the face is hit. counts: true makes a hit count as the player's own
+  // paddle hit (combo reset, speed-up). Rules move them by writing x / w / vx each step.
+  G.addXPaddle = function (opts) {
+    var xp = { x: C.W / 2, y: 100, w: 70, h: C.paddle.h, vx: 0, face: 1, counts: false, owner: null,
+      kind: 'mirror', color: '#4fd8ff', squash: 0, hitFlash: 0, off: false };
+    for (var k in opts) xp[k] = opts[k];
+    this.xpaddles.push(xp);
+    return xp;
+  };
+  G.xpaddleCollide = function (b) {
+    for (var i = 0; i < this.xpaddles.length; i++) {
+      var q = this.xpaddles[i];
+      if (q.off || (q.face > 0 ? b.vy >= 0 : b.vy <= 0)) continue;
+      var hw = q.w / 2, qx = this.wrapX ? this.wrapNear(q.x, b.x) : q.x;
+      if (P.circleRect(b.x, b.y, b.r, qx - hw, q.y - q.h / 2, q.w, q.h) <= 0) continue;
+      if (q.face > 0 ? b.y >= q.y - 1 : b.y <= q.y + 1) this.xpaddleBounce(b, q, qx);
+      else {
+        b.x = b.x < qx ? qx - hw - b.r : qx + hw + b.r;
+        b.vx = (b.x < qx ? -1 : 1) * Math.abs(b.vx);
+      }
+    }
+  };
+  G.xpaddleBounce = function (b, q, qx) {
+    b.y = q.y + q.face * (q.h / 2 + b.r);
+    var a = P.paddleAngle(b.x, qx, q.w / 2, q.vx, C.ball) + (q.aim || 0);
+    a = P.clamp(a, -C.ball.maxAngleDeg * P.DEG, C.ball.maxAngleDeg * P.DEG);
+    var s = Math.min(this.speed() * b.boost, C.ball.absMaxSpeed);
+    b.vx = Math.sin(a) * s; b.vy = q.face * Math.cos(a) * s;
+    q.squash = C.paddle.squashTime; q.hitFlash = 0.1;
+    if (q.counts) {
+      this.combo = 0;
+      this.paddleHits++;
+      if (this.paddleHits % C.ball.speedUpEvery === 0) this.ballSpeed = Math.min(this.preset.speedMax, this.ballSpeed + C.ball.speedUpStep);
+    }
+    this.fx.sound('paddle', a);
+    for (var i = 0; i < this.rules.length; i++) {
+      var r = this.rules[i];
+      if (r.mod.onPaddleHit) r.mod.onPaddleHit(this, r, b, q);
+    }
+  };
+
+  // Start the level again in place without costing a life (rules that offer free retries use this).
+  // Lives, time played and the attempt count carry over; bricks, rules, balls and score start afresh.
+  G.retry = function () {
+    this.attempts++;
+    this.state = 'serve';
+    this.score = 0; this.combo = 0; this.paddleHits = 0;
+    this.ballSpeed = this.preset.speedStart;
+    this.timeScale = 1; this.sinceLaunch = 0; this.sinceHit = 0;
+    this.bomb = false; this.netActive = !!this.preset.net;
+    for (var k in this.eff) this.eff[k] = 0;
+    this.blasts.length = 0;
+    var i;
+    for (i = 0; i < this.capsules.length; i++) this.capsules[i].alive = false;
+    for (i = 0; i < this.lasers.length; i++) this.lasers[i].alive = false;
+    this.paddle.off = false;
+    this.xpaddles.length = 0; this.wrapX = false; this.topOpen = false; this.ghosting = false;
+    this.bricks.length = 0;
+    this.buildGrid(this.level.grid || []);
+    this.rules = []; this.boss = null;
+    var rl = this.level.rules || [];
+    for (i = 0; i < rl.length; i++) this.addRule(rl[i]);
+    this.finalizeBricks();
+    this.newServeBall();
   };
 
   // Count of bricks the level needs destroyed (for HUD/tests).

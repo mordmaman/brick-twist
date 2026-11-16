@@ -101,13 +101,37 @@
       portals: { radius: 17, captureFrac: 0.65 },
       wells: { accelAt60: 820, minDist: 22, planetRadius: 12, predictSeconds: 1.0, predictAimSeconds: 1.4 },
       gusts: { accel: 560, calmMin: 3.2, calmMax: 5, warn: 1.3, gust: 1.6, firstDelay: 3.5 },
-      pinball: { bumperRadius: 14, boost: 1.35 }
+      pinball: { bumperRadius: 14, boost: 1.35 },
+      // World 4
+      lightsout: {
+        dark: 0.93, darkEasy: 0.84,      // how black the dark is (alpha), Normal/Hard and Easy
+        ballLight: 84, paddleLight: 96, capsuleLight: 34, glowLight: 30,
+        lanternLight: 125, lanternTime: 8, // glow bricks leave a lantern this big for this long (s)
+        flashLight: 46, flashTime: 0.45,  // brief light where any brick breaks
+        easyLightMult: 1.3, outline: 0.2  // faint outline on every brick still standing
+      },
+      redblue: { swapCooldown: 0.5, autoSwap: 3 },   // autoSwap: seconds with nothing solid left to hit before colours swap by themselves
+      beat: { period: 3.4, warn: 0.6 },   // seconds for a full cycle (each group solid half of it); warning before a brick turns solid
+      overgrown: { growEvery: 5, sproutTime: 1.4, extraPerRoot: 7, maxRow: 13, ballMargin: 12, witherEvery: 0.06 },
+      // World 5
+      double: { gap: 30, widthMult: 1.3, assist: 24, assistRate: 6 },
+      wrap: {},
+      brickfall: {
+        every: 5.5, telegraph: 1.8, fallSpeed: 62, settleSpeed: 170, pieces: 12, grace: 2,
+        floorRow: 20, overflowRow: 2, clearRowsOnLife: 6, ballMargin: 3
+      },
+      bounces: { count: 12, failDelay: 0.7 }
     },
 
     bosses: {
       gatekeeper: { eyeHp: 3, sway: 52, period: 6, spitEvery: 3.4, spitTell: 0.7, spitSpeed: 150, dazeSeconds: 3, dazeMult: 0.7 },
       serpent: { segments: 14, headHp: 5, vulnerableAt: 2, speedMin: 55, speedMax: 150, spacing: 20, size: 18, turnRate: 0.9 },
-      magnet: { hp: 8, pull: 3.4, warn: 0.7, repel: 3.0, pullAccel: 900, repelAccel: 380, flingRadius: 150, flingBoost: 1.3, bodyRadius: 26 }
+      magnet: { hp: 8, pull: 3.4, warn: 0.7, repel: 3.0, pullAccel: 900, repelAccel: 380, flingRadius: 150, flingBoost: 1.3, bodyRadius: 26 },
+      lighthouse: { hp: 10, bodyRadius: 20, beams: 2, beamHalfDeg: 30, spin: 0.5, spinPerHit: 0.04, beamLength: 420, invuln: 0.8 },
+      rival: {
+        coreHp: 5, paddleW: 66, y: 204, speed: 150, accel: 1100, react: 0.18, aimErr: 22, sight: 150,
+        cheekyAim: 14, dizzy: 2.6, tauntChance: 0.35
+      }
     },
 
     touch: { tapMaxMs: 280, tapMaxMove: 14 },

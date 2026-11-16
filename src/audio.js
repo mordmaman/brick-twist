@@ -98,6 +98,14 @@
           [784, 988, 1175, 1568].forEach(function (n, i) { this.tone('square', n, n, 0.14, 0.1, 0.3 + i * 0.09); }, this);
           break;
         case 'flip': this.tone('sawtooth', 200, 900, 0.2, 0.1); break;
+        case 'lantern': this.tone('sine', 660, 990, 0.25, 0.16); this.tone('sine', 1320, 1320, 0.4, 0.06, 0.08); break;
+        case 'swap': this.tone('square', 520, 780, 0.08, 0.12); this.tone('square', 780, 520, 0.08, 0.1, 0.08); break;
+        case 'beat': this.tone('sine', arg ? 330 : 440, arg ? 330 : 440, 0.06, 0.12); break;
+        case 'grow': this.tone('triangle', 260, 420, 0.12, 0.08); break;
+        case 'wither': this.tone('triangle', 420, 140, 0.5, 0.18); this.hiss(0.4, 0.08, 'lowpass', 900); break;
+        case 'drop': this.tone('sine', 900, 500, 0.12, 0.08); break;
+        case 'land': this.tone('square', 140, 110, 0.07, 0.14); this.hiss(0.06, 0.1, 'lowpass', 700); break;
+        case 'retry': this.tone('triangle', 392, 392, 0.08, 0.14); this.tone('triangle', 523, 523, 0.12, 0.14, 0.08); break;
       }
     }
   };

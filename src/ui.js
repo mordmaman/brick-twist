@@ -54,20 +54,20 @@
       var pr = C.presets[cur];
       ctx.fillText(pr.blurb + ' · ' + pr.lives + ' lives', C.W / 2, 144);
 
-      // worlds 1-3 playable
-      var y = 162;
+      // playable worlds (compact rows so five fit on a phone screen)
+      var y = 158;
       for (var w = 0; w < BT.WORLDS.length; w++) {
         var W = BT.WORLDS[w];
         if (W.soon) continue;
-        ctx.textAlign = 'left'; ctx.fillStyle = W.accent; ctx.font = 'bold 13px ' + R.FONT;
+        ctx.textAlign = 'left'; ctx.fillStyle = W.accent; ctx.font = 'bold 12px ' + R.FONT;
         ctx.fillText('WORLD ' + W.n, 20, y + 6);
-        ctx.fillStyle = 'rgba(255,255,255,0.75)'; ctx.font = '13px ' + R.FONT;
-        ctx.fillText(W.name, 90, y + 6);
+        ctx.fillStyle = 'rgba(255,255,255,0.75)'; ctx.font = '12px ' + R.FONT;
+        ctx.fillText(W.name, 86, y + 6);
         for (i = 0; i < 5; i++) {
           var id = (W.n - 1) * 5 + i + 1, L = BT.levelById(id);
-          this.tile(ctx, 20 + i * 66, y + 16, L, W, S, t);
+          this.tile(ctx, 20 + i * 66, y + 14, L, W, S, t);
         }
-        y += 94;
+        y += 76;
       }
       // worlds 4-6: coming soon
       for (w = 0; w < BT.WORLDS.length; w++) {
@@ -81,16 +81,16 @@
         ctx.font = '12px ' + R.FONT; ctx.fillText(W.name, 98, y + 16);
         ctx.textAlign = 'right'; ctx.fillStyle = 'rgba(255,211,90,0.55)'; ctx.font = 'italic 12px ' + R.FONT;
         ctx.fillText('coming soon', C.W - 32, y + 16);
-        y += 36;
+        y += 34;
       }
       // footer
       var total = S.totalStars(), max = BT.LEVELS.length * 3;
-      R.drawStar(ctx, C.W / 2 - 40, y + 20, 8, true);
+      R.drawStar(ctx, C.W / 2 - 40, y + 16, 8, true);
       ctx.textAlign = 'left'; ctx.fillStyle = '#ffffff'; ctx.font = 'bold 14px ' + R.FONT;
-      ctx.fillText(total + ' / ' + max, C.W / 2 - 26, y + 21);
+      ctx.fillText(total + ' / ' + max, C.W / 2 - 26, y + 17);
       ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(255,255,255,0.45)'; ctx.font = '11px ' + R.FONT;
-      ctx.fillText('Drag anywhere to steer · tap to launch · keys: arrows + space', C.W / 2, y + 46);
-      if (!S.ok) { ctx.fillStyle = 'rgba(255,160,120,0.6)'; ctx.fillText('Progress is not being saved on this device', C.W / 2, y + 62); }
+      ctx.fillText('Drag anywhere to steer · tap to launch · keys: arrows + space', C.W / 2, y + 38);
+      if (!S.ok) { ctx.fillStyle = 'rgba(255,160,120,0.6)'; ctx.fillText('Progress is not being saved on this device', C.W / 2, y + 53); }
     },
 
     drawLogo: function (ctx, t) {
@@ -122,7 +122,7 @@
     },
 
     tile: function (ctx, x, y, L, W, S, t) {
-      var R = BT.Render.R, w = 56, h = 62;
+      var R = BT.Render.R, w = 56, h = 54;
       var unlocked = S.isUnlocked(L.id), info = S.levelInfo(L.id);
       R.roundRect(ctx, x, y, w, h, 10);
       ctx.fillStyle = unlocked ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.03)'; ctx.fill();
@@ -130,18 +130,18 @@
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       if (!unlocked) {
         ctx.fillStyle = 'rgba(255,255,255,0.25)';
-        ctx.fillRect(x + w / 2 - 7, y + 26, 14, 11);
+        ctx.fillRect(x + w / 2 - 7, y + 23, 14, 11);
         ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.arc(x + w / 2, y + 26, 5, Math.PI, 0); ctx.stroke();
+        ctx.beginPath(); ctx.arc(x + w / 2, y + 23, 5, Math.PI, 0); ctx.stroke();
         return;
       }
       if (L.boss) { // crown
         ctx.fillStyle = W.accent;
-        ctx.beginPath(); ctx.moveTo(x + 18, y + 14); ctx.lineTo(x + 22, y + 6); ctx.lineTo(x + 28, y + 11); ctx.lineTo(x + 34, y + 6); ctx.lineTo(x + 38, y + 14); ctx.closePath(); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(x + 18, y + 12); ctx.lineTo(x + 22, y + 4); ctx.lineTo(x + 28, y + 9); ctx.lineTo(x + 34, y + 4); ctx.lineTo(x + 38, y + 12); ctx.closePath(); ctx.fill();
       }
-      ctx.fillStyle = '#ffffff'; ctx.font = 'bold 20px ' + R.FONT;
-      ctx.fillText(String(L.id), x + w / 2, y + (L.boss ? 28 : 24));
-      for (var s = 0; s < 3; s++) R.drawStar(ctx, x + 14 + s * 14, y + 48, 5.5, s < info.stars);
+      ctx.fillStyle = '#ffffff'; ctx.font = 'bold 19px ' + R.FONT;
+      ctx.fillText(String(L.id), x + w / 2, y + (L.boss ? 24 : 21));
+      for (var s = 0; s < 3; s++) R.drawStar(ctx, x + 14 + s * 14, y + 42, 5.5, s < info.stars);
       this.add(x - 2, y - 2, w + 4, h + 4, 'start:' + L.id);
     },
 
@@ -212,7 +212,8 @@
       if (next) this.button(ctx, 60, 340, C.W - 120, 48, 'Next level', 'next', true);
       else {
         ctx.fillStyle = '#ffd35a'; ctx.font = 'bold 14px ' + R.FONT;
-        ctx.fillText('World 4 is coming soon!', C.W / 2, 364);
+        var nextW = BT.WORLDS[L.world]; // the world after this one
+        ctx.fillText(nextW ? 'World ' + nextW.n + ' is coming soon!' : 'You beat them all!', C.W / 2, 364);
       }
       this.button(ctx, 60, 400, (C.W - 132) / 2, 46, 'Replay', 'restart');
       this.button(ctx, 72 + (C.W - 132) / 2, 400, (C.W - 132) / 2, 46, 'Levels', 'levels');
