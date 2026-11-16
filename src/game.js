@@ -22,7 +22,8 @@
     this.cfg = C;
     this.level = level;
     this.presetName = presetName;
-    this.preset = C.presets[presetName] || C.presets.normal;
+    // opts.preset: a full preset object to use instead (Endless passes one with its round's ball speeds)
+    this.preset = opts.preset || C.presets[presetName] || C.presets.normal;
     this.rng = mulberry32(opts.seed != null ? opts.seed : ((Math.random() * 1e9) | 0));
     this.fx = {
       sound: NOOP, burst: NOOP, ring: NOOP, text: NOOP, shake: NOOP

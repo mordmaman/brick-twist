@@ -1,12 +1,13 @@
 // Headless test for Brick Twist. Run: node tests/sim.js
-// Loads the pure-logic source files (no DOM) and checks physics, levels, a bot playthrough and save data.
+// Loads the pure-logic source files (no DOM) and checks physics, levels, a bot playthrough, Endless and save data.
+// Flags: --quick (fewer seeds), --endless (only the Endless sections, after the physics and level checks).
 'use strict';
 var fs = require('fs');
 var path = require('path');
 var vm = require('vm');
 
 var SRC = path.join(__dirname, '..', 'src');
-['config.js', 'physics.js', 'bricks.js', 'rules.js', 'bosses.js', 'levels.js', 'game.js', 'save.js'].forEach(function (f) {
+['config.js', 'physics.js', 'bricks.js', 'rules.js', 'bosses.js', 'levels.js', 'endless.js', 'game.js', 'save.js'].forEach(function (f) {
   vm.runInThisContext(fs.readFileSync(path.join(SRC, f), 'utf8'), { filename: f });
 });
 var BT = globalThis.BT, C = BT.CONFIG;
@@ -15,6 +16,7 @@ var failures = 0, checks = 0;
 function ok(cond, msg) { checks++; if (!cond) { failures++; console.log('  FAIL: ' + msg); } }
 function section(name) { console.log('\n== ' + name); }
 var QUICK = process.argv.indexOf('--quick') >= 0;
+var ENDLESS_ONLY = process.argv.indexOf('--endless') >= 0;
 var DT = 1 / C.physicsHz;
 
 // ------------------------------------------------------------------ physics
@@ -304,6 +306,8 @@ function playLevel(L, preset, seed, limitSec, clumsy) {
   }
   return { won: false, time: total * DT, gameOvers: gameOvers, report: report };
 }
+
+if (ENDLESS_ONLY) { endlessSection(); return finish(); }
 
 section('Bot playthrough (Normal' + (QUICK ? ', quick' : '') + ')');
 var LIMIT = 600; // game seconds per level, across retries
@@ -1055,5 +1059,292 @@ section('Save data');
   S.init(junk); ok(S.data.v === C.saveVersion, 'corrupt save falls back to defaults');
 })();
 
-console.log('\n' + (checks - failures) + '/' + checks + ' checks passed' + (failures ? ', ' + failures + ' FAILED' : ''));
-process.exit(failures ? 1 : 0);
+endlessSection();
+finish();
+
+function finish() {
+  console.log('\n' + (checks - failures) + '/' + checks + ' checks passed' + (failures ? ', ' + failures + ' FAILED' : ''));
+  process.exit(failures ? 1 : 0);
+}
+
+
+// ------------------------------------------------------------------ Endless
+function endlessSection() {
+  var E = BT.Endless, ALL = [1, 2, 3, 4, 5, 6, 7, 8], PRESETS = ['easy', 'normal', 'hard'], reg = BT.Rules.registry;
+  var SAFE_Y = 470; // nothing but the paddle and the serve ball below here at the start of a round
+
+  section('Endless: twists and what may mix');
+  Object.keys(reg).forEach(function (id) {
+    if (reg[id].boss) return;
+    ok(!!(E.TWISTS[id] || E.EXCLUDED[id]), 'rule ' + id + ' is either in the Endless pool or excluded with a reason');
+  });
+  var taughtBy = { fuse: 'tnt', lockkey: 'key' };
+  E.ORDER.forEach(function (id) {
+    var T = E.TWISTS[id], L = BT.LEVELS.filter(function (l) { return l.twist === (taughtBy[id] || id); })[0];
+    ok(!!T && L && L.world === T.world, 'twist ' + id + ' belongs to the world that teaches it (world ' + (T && T.world) + ', level ' + (L && L.id) + ')');
+    if (!T.layout) ok(!!reg[id] && !reg[id].boss, 'twist ' + id + ' is a real rule module');
+  });
+  var ids = E.ORDER, pairs = 0, legal2 = 0, legal3 = 0, asym = 0;
+  for (var i = 0; i < ids.length; i++) for (var j = i + 1; j < ids.length; j++) {
+    pairs++;
+    if (!E.conflictReason(ids[i], ids[j]) !== !E.conflictReason(ids[j], ids[i])) asym++;
+    if (E.legalSet([ids[i], ids[j]])) legal2++;
+    for (var k = j + 1; k < ids.length; k++) if (E.legalSet([ids[i], ids[j], ids[k]])) legal3++;
+  }
+  ok(asym === 0, 'compatibility is symmetric');
+  console.log('    ' + ids.length + ' twists, ' + legal2 + ' of ' + pairs + ' pairs and ' + legal3 + ' triples may share a round');
+  [['redhot', 'bigsmall'], ['wrap', 'walls'], ['redblue', 'beat'], ['ice', 'thunder'], ['conveyor', 'walls'], ['orbit', 'brickfall'],
+    ['lightsout', 'mirrors'], ['lightsout', 'portals'], ['double', 'squeeze'], ['runaway', 'conveyor'], ['brickfall', 'lockkey'], ['gusts', 'wells']].forEach(function (p) {
+    ok(!E.compatible(p[0], p[1]), p[0] + ' and ' + p[1] + ' never share a round (' + E.conflictReason(p[0], p[1]) + ')');
+  });
+  ids.forEach(function (a) {
+    var n = ids.filter(function (b) { return b !== a && E.compatible(a, b); }).length;
+    ok(n >= 3, 'twist ' + a + ' has partners (' + n + ')');
+  });
+
+  section('Endless: generated rounds (fair, reachable, deterministic)');
+  var t0 = Date.now(), WSETS = [[1], [1, 2], [1, 2, 3], [1, 2, 3, 4], [1, 2, 3, 4, 5], [1, 2, 3, 4, 5, 6], [1, 2, 3, 4, 5, 6, 7], ALL];
+  var NSEED = QUICK ? 12 : 50, NROUND = 30, n = 0, bad = {}, seenTw = {}, maxAtt = 0, sumAtt = 0;
+  function fail(why, L) { bad[why] = (bad[why] || 0) + 1; if (bad[why] <= 2) console.log('    ' + why + ': seed ' + L.seed + ' round ' + L.round + ' ' + L.twists.join('+')); }
+  WSETS.forEach(function (ws) {
+    var allowed = E.pool(ws);
+    for (var sd = 1; sd <= NSEED; sd++) for (var rd = 1; rd <= NROUND; rd++) {
+      var preset = PRESETS[(sd + rd) % 3], seed = (sd * 2654435761 + ws.length) >>> 0;
+      var L = E.generate({ seed: seed, round: rd, preset: preset, worlds: ws });
+      n++; sumAtt += L.attempts; maxAtt = Math.max(maxAtt, L.attempts);
+      if ((sd + rd) % 4 === 0 && JSON.stringify(L) !== JSON.stringify(E.generate({ seed: seed, round: rd, preset: preset, worlds: ws }))) fail('not deterministic', L);
+      if (L.fallback) fail('fell back to the plain wall', L);
+      L.twists.forEach(function (t) { seenTw[t] = true; if (allowed.indexOf(t) < 0) fail('twist from an unfinished world', L); });
+      if (!E.legalSet(L.twists)) fail('illegal twist set', L);
+      var want = rd >= C.endless.threeFrom ? 3 : 2;
+      if (L.twists.length > want || (ws.length === 8 && L.twists.length !== want) || L.twists.length < Math.min(2, allowed.length)) fail('wrong number of twists', L);
+      var why = endlessReach(L);
+      if (why) fail('unreachable: ' + why, L);
+      why = endlessPlacement(L, preset, rd);
+      if (why) fail(why, L);
+    }
+  });
+  var badN = Object.keys(bad).reduce(function (a, k) { return a + bad[k]; }, 0);
+  console.log('    ' + n + ' rounds in ' + ((Date.now() - t0) / 1000).toFixed(1) + 's, layout attempts avg ' + (sumAtt / n).toFixed(2) + ' max ' + maxAtt + (badN ? ', problems ' + JSON.stringify(bad) : ''));
+  ok(badN === 0, 'every generated round is legal, reachable, deterministic and keeps the ball and paddle clear (' + n + ' rounds)');
+  ok(ids.every(function (id) { return seenTw[id]; }), 'every twist in the pool turns up in some round (' + ids.filter(function (id) { return !seenTw[id]; }).join(',') + ')');
+  // only finished worlds: World 1 alone gives only Fuse / Lock and Key; nothing from World 5+ with Worlds 1-4
+  var only1 = true, upTo4 = true;
+  for (var s1 = 1; s1 <= 40; s1++) for (var r1 = 1; r1 <= 12; r1++) {
+    E.generate({ seed: s1, round: r1, worlds: [1] }).twists.forEach(function (t) { if (E.TWISTS[t].world !== 1) only1 = false; });
+    E.generate({ seed: s1, round: r1, worlds: [1, 2, 3, 4] }).twists.forEach(function (t) { if (E.TWISTS[t].world > 4) upTo4 = false; });
+  }
+  ok(only1 && upTo4, 'Endless only draws twists from worlds finished on this device');
+  ok(JSON.stringify(E.generate({ seed: 5, round: 3, worlds: ALL })) !== JSON.stringify(E.generate({ seed: 6, round: 3, worlds: ALL })), 'different seeds give different rounds');
+
+  // it gets harder: more armour, more bricks, a faster ball, a third twist
+  function stats(rd) {
+    var hp = 0, bricks = 0, tw = 0;
+    for (var sd = 1; sd <= 40; sd++) {
+      var L = E.generate({ seed: sd, round: rd, preset: 'normal', worlds: ALL }), g = new BT.Game(L, 'normal', { seed: 1, preset: E.roundPreset('normal', rd) });
+      g.bricks.forEach(function (b) { if (b.alive && b.required && b.breakable) { bricks++; hp += b.hp; } });
+      tw += L.twists.length;
+    }
+    return { hpPer: hp / bricks, bricks: bricks / 40, tw: tw / 40, speed: E.roundPreset('normal', rd).speedStart, max: E.roundPreset('normal', rd).speedMax };
+  }
+  var st1 = stats(1), st8 = stats(8), st16 = stats(16);
+  console.log('    round 1: ' + st1.bricks.toFixed(0) + ' bricks, ' + st1.hpPer.toFixed(2) + ' hits each, ball ' + st1.speed + '-' + st1.max + '; round 8: ' + st8.bricks.toFixed(0) + ', ' + st8.hpPer.toFixed(2) + ', ' + st8.speed + '-' + st8.max + ', ' + st8.tw.toFixed(1) + ' twists; round 16: ' + st16.bricks.toFixed(0) + ', ' + st16.hpPer.toFixed(2) + ', ' + st16.speed + '-' + st16.max);
+  ok(st16.hpPer > st1.hpPer + 0.15 && st16.speed > st1.speed && st16.max > st1.max && st8.tw === 3 && st1.tw === 2 && st16.max <= C.ball.absMaxSpeed, 'rounds get harder: more armour, a faster ball, three twists from round ' + C.endless.threeFrom);
+  var presetsOk = PRESETS.every(function (p) { var a = E.roundPreset(p, 1); return a.speedStart === C.presets[p].speedStart && a.lives === C.presets[p].lives && a.paddleW === C.presets[p].paddleW; });
+  ok(presetsOk, 'round 1 uses the chosen difficulty preset unchanged');
+
+  section('Endless: a safe opening');
+  (function () {
+    var bad2 = {}, nn = 0;
+    for (var sd = 1; sd <= (QUICK ? 40 : 160); sd++) {
+      var rd = 1 + (sd * 7) % 24, preset = PRESETS[sd % 3], L = E.generate({ seed: sd * 31, round: rd, preset: preset, worlds: ALL });
+      var g = new BT.Game(L, preset, { seed: sd, preset: E.roundPreset(preset, rd) }), bot = new Bot(g, BT.mulberry32(sd));
+      var lives0 = g.lives, frozen = 0, moved = 0, strikes = 0, crushed = 0;
+      var origLose = g.loseLife; g.loseLife = function (why) { if (why === 'crushed') crushed++; return origLose.call(this, why); };
+      g.tap();
+      for (var st = 0; st < Math.round(3 / DT) - 1; st++) { // the first 3 seconds of play
+        bot.act(DT); g.step(DT);
+        if (g.paddle.frozen > 0) frozen++;
+        if (g.wallL > 0 || g.wallR < C.W) moved++;
+        g.rules.forEach(function (r) {
+          if (r.id === 'squeeze' && r.s.offset > 0) moved++;
+          if (r.id === 'thunder' && r.s.flash > 0) strikes++;
+          if (r.id === 'gusts' && r.s.phase === 'gust') moved++;
+          if (r.id === 'brickfall' && r.s.left < r.p.pieces) moved++;
+          if (r.id === 'overgrown' && r.s.sprouts.length) moved++;
+        });
+      }
+      nn++;
+      if (frozen) bad2.frozen = (bad2.frozen || 0) + 1;
+      if (moved) { bad2.hazard = (bad2.hazard || 0) + 1; console.log('    hazard early: ' + L.twists.join('+') + ' ' + preset + ' round ' + rd); }
+      if (strikes) bad2.strike = (bad2.strike || 0) + 1;
+      if (crushed) bad2.crushed = (bad2.crushed || 0) + 1;
+      if (g.lives < lives0 && !g.state) bad2.lost = (bad2.lost || 0) + 1;
+    }
+    ok(!Object.keys(bad2).length, 'no hazard acts in the first 3 seconds after launch (' + nn + ' rounds) ' + JSON.stringify(bad2));
+  })();
+
+  section('Endless: bot runs (rounds reached, clear times)');
+  function runEndless(seed, preset, worlds, maxRound, clumsy) {
+    var rng = BT.mulberry32(seed * 977 + 3), lives = C.presets[preset].lives, score = 0, round = 1, times = [], stuck = 0;
+    var rep = { speed: 0, outside: 0, inside: 0 };
+    while (round <= maxRound) {
+      var L = E.generate({ seed: seed, round: round, preset: preset, worlds: worlds });
+      var g = new BT.Game(L, preset, { seed: seed * 1000 + round, preset: E.roundPreset(preset, round) });
+      g.lives = lives; g.score = score;
+      var bot = new Bot(g, rng, clumsy), steps = 0, limit = Math.round(600 / DT);
+      while (g.state !== 'won' && g.state !== 'lost' && steps < limit) {
+        bot.act(DT); g.step(DT); steps++;
+        checkBalls(g, rep);
+        if (!g.wrapX && (g.paddle.x - g.paddle.w / 2 < g.wallL - 0.01 || g.paddle.x + g.paddle.w / 2 > g.wallR + 0.01)) rep.outside++;
+      }
+      if (g.state !== 'won') { if (g.state !== 'lost') stuck++; break; }
+      times.push(steps * DT);
+      lives = Math.min(C.endless.maxLives, g.lives + (round % C.endless.lifeEvery === 0 ? 1 : 0)); score = g.score;
+      round++;
+    }
+    return { reached: round, cleared: times.length, times: times, rep: rep, stuck: stuck, score: score };
+  }
+  var runs = [];
+  [1, 2, 3, 4, 5, 6].slice(0, QUICK ? 3 : 6).forEach(function (sd) { runs.push({ label: 'Normal, all worlds, seed ' + sd, need: 10, r: runEndless(sd, 'normal', ALL, 12) }); });
+  if (!QUICK) {
+    runs.push({ label: 'Easy, all worlds, seed 7', need: 10, r: runEndless(7, 'easy', ALL, 12) });
+    runs.push({ label: 'Hard, all worlds, seed 8', need: 10, r: runEndless(8, 'hard', ALL, 12) });
+    runs.push({ label: 'Normal, World 1 only, seed 9', need: 10, r: runEndless(9, 'normal', [1], 11) });
+    runs.push({ label: 'Normal, Worlds 1-4, seed 10', need: 10, r: runEndless(10, 'normal', [1, 2, 3, 4], 11) });
+    runs.push({ label: 'Clumsy bot on Easy, seed 11 (info)', need: 0, r: runEndless(11, 'easy', ALL, 12, true) });
+    runs.push({ label: 'Clumsy bot on Normal, seed 12 (info)', need: 0, r: runEndless(12, 'normal', ALL, 12, true) });
+  }
+  var allTimes = [];
+  runs.forEach(function (x) {
+    var r = x.r, ts = r.times.slice().sort(function (a, b) { return a - b; });
+    allTimes = allTimes.concat(x.need ? r.times : []);
+    console.log('  ' + pad(x.label, 38) + ' cleared ' + r.cleared + ' rounds, reached round ' + r.reached + ', score ' + r.score +
+      ', clear median ' + (ts.length ? ts[(ts.length - 1) >> 1].toFixed(0) : '-') + 's max ' + (ts.length ? ts[ts.length - 1].toFixed(0) : '-') + 's');
+    if (x.need) ok(r.cleared >= x.need, x.label + ': the bot clears at least ' + x.need + ' rounds (' + r.cleared + ')');
+    ok(r.stuck === 0, x.label + ': no round is ever stuck (every round ends within 600s)');
+    ok(r.rep.speed === 0 && r.rep.outside === 0 && r.rep.inside === 0, x.label + ': no tunnelling, ball always inside the field, never over max speed ' + JSON.stringify(r.rep));
+  });
+  allTimes.sort(function (a, b) { return a - b; });
+  if (allTimes.length) console.log('    clear times over ' + allTimes.length + ' rounds: median ' + allTimes[(allTimes.length - 1) >> 1].toFixed(0) + 's, 90% under ' + allTimes[Math.floor(allTimes.length * 0.9)].toFixed(0) + 's, slowest ' + allTimes[allTimes.length - 1].toFixed(0) + 's');
+  // the same seed plays out the same way
+  var a1 = runEndless(3, 'normal', ALL, 3), a2 = runEndless(3, 'normal', ALL, 3);
+  ok(JSON.stringify(a1) === JSON.stringify(a2), 'an Endless run is deterministic for a seed');
+
+  section('Endless: unlocking and save');
+  (function () {
+    var cleared = function (n) { return function (id) { return id <= n; }; };
+    ok(!E.unlocked(cleared(4)) && E.unlocked(cleared(5)), 'Endless is locked until World 1 is finished (level 5 cleared)');
+    ok(JSON.stringify(E.completedWorlds(cleared(5))) === '[1]' && JSON.stringify(E.completedWorlds(cleared(24))) === '[1,2,3,4]' && E.completedWorlds(cleared(40)).length === 8, 'finished worlds follow the cleared boss levels');
+    C.endless.unlockAll = true;
+    ok(E.unlocked(cleared(0)) && E.completedWorlds(cleared(0)).length === 8, 'the CONFIG flag unlocks Endless and every twist for testing');
+    C.endless.unlockAll = false;
+
+    function MemStore(init) { this.m = init || {}; }
+    MemStore.prototype.getItem = function (k) { return this.m.hasOwnProperty(k) ? this.m[k] : null; };
+    MemStore.prototype.setItem = function (k, v) { this.m[k] = String(v); };
+    var S = BT.Save;
+    // a phase-3 save (the whole campaign played, no Endless yet) loads untouched
+    var p3 = { v: 2, progress: {}, difficulty: 'hard', muted: true, seen: { capsules: true, 'boss-machine': true } };
+    for (var li = 1; li <= 40; li++) p3.progress[li] = { stars: (li % 3) + 1, best: li * 100, cleared: true };
+    var st = new MemStore(); st.m[C.saveKey] = JSON.stringify(p3);
+    S.init(st);
+    var same = true;
+    for (li = 1; li <= 40; li++) { var inf = S.levelInfo(li); if (inf.stars !== (li % 3) + 1 || inf.best !== li * 100 || !inf.cleared) same = false; }
+    ok(same && S.data.difficulty === 'hard' && S.data.muted && S.data.seen['boss-machine'] && S.data.v === C.saveVersion, 'a phase-3 save loads with every level, star, score and setting untouched');
+    ok(S.endlessBest('normal').round === 0 && S.endlessBest('hard').score === 0, 'and starts with no Endless bests');
+    var nb = S.recordEndless('hard', 7, 4321);
+    ok(nb.round && nb.score && S.endlessBest('hard').round === 7, 'a first Endless run sets both bests');
+    var again = new MemStore(st.m); S.init(again);
+    ok(S.endlessBest('hard').round === 7 && S.endlessBest('hard').score === 4321 && S.levelInfo(40).stars === 2 && S.totalStars() === p3Total(), 'Endless bests persist and the campaign is still untouched');
+    nb = S.recordEndless('hard', 5, 9000);
+    ok(!nb.round && nb.score && S.endlessBest('hard').round === 7 && S.endlessBest('hard').score === 9000, 'bests only go up (round and score kept separately)');
+    S.recordEndless('easy', 12, 100);
+    ok(S.endlessBest('easy').round === 12 && S.endlessBest('normal').round === 0 && S.endlessBest('hard').round === 7, 'separate bests per difficulty');
+    var junk = { v: 2, progress: { 1: { stars: 1, best: 5, cleared: true } }, endless: { normal: { round: 'x', score: -4 }, bogus: { round: 3 }, hard: 'no' } };
+    var st2 = new MemStore(); st2.m[C.saveKey] = JSON.stringify(junk);
+    S.init(st2);
+    ok(S.endlessBest('normal').round === 0 && !S.data.endless.bogus && S.endlessBest('hard').round === 0 && S.levelInfo(1).stars === 1, 'broken Endless entries are dropped without touching progress');
+    var v1 = { version: 1, stars: { 1: 2 }, best: { 1: 50 } }, st3 = new MemStore(); st3.m[C.saveKey] = JSON.stringify(v1);
+    S.init(st3);
+    ok(S.levelInfo(1).stars === 2 && S.endlessBest('normal').round === 0, 'a v1 save still migrates (no Endless bests)');
+    S.init(null);
+    function p3Total() { var t = 0; for (var q = 1; q <= 40; q++) t += (q % 3) + 1; return t; }
+  })();
+}
+
+// Independent reachability check for an Endless round (not the generator's own): every required brick can be
+// reached from the open area; the key while the padlocks are still shut; every unbreakable brick that has to be
+// hit (anchor, switch, splitter, pusher) has an open side. Sliding rows count as open; edges join with no side
+// walls; portals link their two cells.
+function endlessReach(L) {
+  var grid = L.grid, rows = grid.length, cols = C.grid.cols, conv = {}, wrap = false, links = {};
+  (L.rules || []).forEach(function (ru) {
+    if (ru.id === 'conveyor') for (var k in ru.rows) conv[k] = true;
+    if (ru.id === 'wrap') wrap = true;
+    if (ru.id === 'portals') ru.pairs.forEach(function (pr) { var a = cell(pr[0]), b = cell(pr[1]); links[a] = b; links[b] = a; });
+  });
+  function cell(p) { return Math.floor((p.y - C.grid.top) / C.grid.cellH) + ',' + Math.floor(p.x / C.grid.cellW); }
+  function flood(lockedOpen) {
+    var seen = {}, q = [], maxR = Math.max(rows, 21) + 8;
+    for (var c = 0; c < cols; c++) q.push([maxR - 1, c]);
+    while (q.length) {
+      var cur = q.shift(), r = cur[0], c2 = cur[1];
+      if (wrap) c2 = (c2 + cols) % cols;
+      var key = r + ',' + c2;
+      if (r < 0 || r >= maxR || c2 < 0 || c2 >= cols || seen[key]) continue;
+      if (r < rows && !conv[r]) {
+        var ch = grid[r][c2];
+        var open = ch === '.' || GRID_BREAKABLE.indexOf(ch) >= 0 && ch !== 'L' || (ch === 'L' && lockedOpen);
+        if (!open) continue;
+      }
+      seen[key] = true;
+      q.push([r + 1, c2], [r - 1, c2], [r, c2 + 1], [r, c2 - 1]);
+      if (links[key]) q.push(links[key].split(',').map(Number));
+    }
+    return seen;
+  }
+  var shut = flood(false), opened = flood(true), required = 0;
+  for (var r = 0; r < rows; r++) for (var c = 0; c < cols; c++) {
+    var ch = grid[r][c], key = r + ',' + c;
+    if (ch === 'K' && !shut[key]) return 'key ' + key;
+    if (GRID_BREAKABLE.indexOf(ch) >= 0) { required++; if (!opened[key]) return 'brick ' + ch + ' ' + key; }
+    if ('ASXH'.indexOf(ch) >= 0 && !conv[r] && !(shut[(r + 1) + ',' + c] || shut[(r - 1) + ',' + c] || shut[r + ',' + (c + 1)] || shut[r + ',' + (c - 1)])) return ch + ' cannot be hit ' + key;
+  }
+  if (grid.join('').indexOf('L') >= 0 && grid.join('').indexOf('K') < 0) return 'padlocks without a key';
+  if (!required && !(L.rules || []).some(function (ru) { return ru.id === 'orbit' || ru.id === 'pendulum'; })) return 'nothing to break';
+  return null;
+}
+
+// Build the round as a game and check what is where at the start: bricks clear of the serve ball and paddle,
+// rule elements (bumpers, planets, portals, mirrors) clear of bricks, of each other and of the paddle zone.
+function endlessPlacement(L, preset, round) {
+  var g = new BT.Game(L, preset, { seed: 1, preset: BT.Endless.roundPreset(preset, round) }), P = BT.Physics, b0 = g.balls[0], i;
+  var need = 0;
+  g.bricks.forEach(function (b) { if (b.alive && (b.required || b.type === 'core')) need++; });
+  if (!need) return 'nothing required';
+  if (g.isCleared()) return 'cleared at the start';
+  for (i = 0; i < g.bricks.length; i++) {
+    var b = g.bricks[i];
+    if (!b.alive) continue;
+    if (b.y + b.h > 470) return 'brick in the paddle zone';
+    if (P.circleRect(b0.x, b0.y, b0.r + 8, b.x, b.y, b.w, b.h) > 0) return 'brick on the serve ball';
+    if (b.x < -0.5 || b.x + b.w > C.W + 0.5 || b.y < C.TOP) return 'brick outside the field';
+  }
+  var els = [];
+  g.rules.forEach(function (r) {
+    if (r.id === 'pinball') r.p.bumpers.forEach(function (q) { els.push({ x: q.x, y: q.y, r: r.p.bumperRadius }); });
+    if (r.id === 'wells') r.p.planets.forEach(function (q) { els.push({ x: q.x, y: q.y, r: r.p.planetRadius }); });
+    if (r.id === 'portals') r.s.pos.forEach(function (q) { els.push({ x: q.x, y: q.y, r: r.p.radius }); });
+  });
+  g.deflectors.forEach(function (d) { els.push({ x: d.x, y: d.y, r: d.len / 2 + d.thick }); });
+  for (i = 0; i < els.length; i++) {
+    var e = els[i];
+    if (e.y + e.r > 470 || e.y - e.r < C.TOP || e.x - e.r < 0 || e.x + e.r > C.W) return 'element out of place';
+    for (var j = i + 1; j < els.length; j++) if (Math.hypot(els[j].x - e.x, els[j].y - e.y) < e.r + els[j].r + 2 * C.ball.radius) return 'elements touching';
+    for (var k = 0; k < g.bricks.length; k++) { var bk = g.bricks[k]; if (bk.alive && P.circleRect(e.x, e.y, e.r + C.ball.radius, bk.x, bk.y, bk.w, bk.h) > 0) return 'element on a brick'; }
+    if (Math.hypot(e.x - b0.x, e.y - b0.y) < e.r + 60) return 'element on the serve ball';
+  }
+  if (g.wallL !== 0 || g.wallR !== C.W) return 'walls start moved in';
+  return null;
+}

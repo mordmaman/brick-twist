@@ -58,11 +58,11 @@
       var top = this.LIST_TOP, sc = app.sel.scroll, max = this.maxScroll();
       this.oy = top - sc;
       ctx.save();
-      ctx.beginPath(); ctx.rect(0, top, C.W, C.H - top); ctx.clip();
+      ctx.beginPath(); ctx.rect(0, top, C.W, this.LIST_BOTTOM - top); ctx.clip();
       var y = 0;
       for (var w = 0; w < BT.WORLDS.length; w++) {
         var W = BT.WORLDS[w], ry = this.oy + y;
-        if (ry > -80 && ry < C.H) {
+        if (ry > -80 && ry < this.LIST_BOTTOM) {
           ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillStyle = W.accent; ctx.font = 'bold 12px ' + R.FONT;
           ctx.fillText('WORLD ' + W.n, 20, ry + 6);
           ctx.fillStyle = 'rgba(255,255,255,0.75)'; ctx.font = '12px ' + R.FONT;
@@ -92,29 +92,78 @@
           fade.addColorStop(0, 'rgba(5,6,13,0.85)'); fade.addColorStop(1, 'rgba(5,6,13,0)');
           ctx.fillStyle = fade; ctx.fillRect(0, top, C.W, 18);
         }
+        var lb = this.LIST_BOTTOM;
         if (sc < max - 1) {
-          fade = ctx.createLinearGradient(0, C.H - 26, 0, C.H);
+          fade = ctx.createLinearGradient(0, lb - 26, 0, lb);
           fade.addColorStop(0, 'rgba(5,6,13,0)'); fade.addColorStop(1, 'rgba(5,6,13,0.9)');
-          ctx.fillStyle = fade; ctx.fillRect(0, C.H - 26, C.W, 26);
+          ctx.fillStyle = fade; ctx.fillRect(0, lb - 26, C.W, 26);
           var a = 0.35 + 0.25 * Math.sin(t * 3);
           ctx.fillStyle = 'rgba(255,255,255,' + a.toFixed(3) + ')';
-          ctx.beginPath(); ctx.moveTo(C.W / 2 - 8, C.H - 12); ctx.lineTo(C.W / 2 + 8, C.H - 12); ctx.lineTo(C.W / 2, C.H - 5); ctx.closePath(); ctx.fill();
+          ctx.beginPath(); ctx.moveTo(C.W / 2 - 8, lb - 12); ctx.lineTo(C.W / 2 + 8, lb - 12); ctx.lineTo(C.W / 2, lb - 5); ctx.closePath(); ctx.fill();
         }
-        var trackH = C.H - top - 8, thumbH = Math.max(40, trackH * (C.H - top) / (C.H - top + max));
+        var trackH = lb - top - 8, thumbH = Math.max(40, trackH * (lb - top) / (lb - top + max));
         var ty = top + 4 + (trackH - thumbH) * (sc / max);
         R.roundRect(ctx, C.W - 6, ty, 3, thumbH, 1.5);
         ctx.fillStyle = 'rgba(255,255,255,0.25)'; ctx.fill();
       }
+      this.endlessBar(ctx, app, t);
+    },
+
+    // The Endless entry: a bar fixed under the list, always in view (it never scrolls away).
+    ENDLESS_BAR: { x: 14, y: 584, w: 332, h: 48 },
+    endlessBar: function (ctx, app, t) {
+      var R = BT.Render.R, S = BT.Save, b = this.ENDLESS_BAR, open = app.endlessOpen();
+      ctx.fillStyle = '#05060d'; ctx.fillRect(0, this.LIST_BOTTOM, C.W, C.H - this.LIST_BOTTOM);
+      ctx.fillStyle = 'rgba(255,255,255,0.10)'; ctx.fillRect(0, this.LIST_BOTTOM, C.W, 1);
+      R.roundRect(ctx, b.x, b.y, b.w, b.h, 14);
+      if (open) {
+        var grd = ctx.createLinearGradient(b.x, 0, b.x + b.w, 0);
+        grd.addColorStop(0, '#7a4dff'); grd.addColorStop(1, '#2fc8ff');
+        ctx.fillStyle = grd; ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,' + (0.45 + 0.25 * Math.sin(t * 2.5)).toFixed(3) + ')'; ctx.lineWidth = 2; ctx.stroke();
+      } else {
+        ctx.fillStyle = 'rgba(255,255,255,0.05)'; ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,0.14)'; ctx.lineWidth = 1; ctx.stroke();
+      }
+      // infinity sign (or a padlock while locked)
+      var ix = b.x + 34, iy = b.y + b.h / 2;
+      ctx.strokeStyle = open ? '#ffffff' : 'rgba(255,255,255,0.35)'; ctx.lineWidth = 3.5; ctx.lineCap = 'round';
+      if (open) {
+        ctx.beginPath();
+        ctx.moveTo(ix, iy);
+        ctx.bezierCurveTo(ix + 6, iy - 11, ix + 19, iy - 11, ix + 19, iy); ctx.bezierCurveTo(ix + 19, iy + 11, ix + 6, iy + 11, ix, iy);
+        ctx.bezierCurveTo(ix - 6, iy - 11, ix - 19, iy - 11, ix - 19, iy); ctx.bezierCurveTo(ix - 19, iy + 11, ix - 6, iy + 11, ix, iy);
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fillRect(ix - 8, iy - 3, 16, 12);
+        ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(ix, iy - 3, 5.5, Math.PI, 0); ctx.stroke();
+      }
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = open ? '#ffffff' : 'rgba(255,255,255,0.45)'; ctx.font = '900 19px ' + R.FONT;
+      ctx.fillText('ENDLESS', b.x + 66, b.y + 17);
+      ctx.font = '12px ' + R.FONT; ctx.fillStyle = open ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.45)';
+      var sub;
+      if (!open) sub = app.lockMsgT > 0 ? 'Clear the Gatekeeper (level 5) first!' : 'Finish World 1 to unlock';
+      else {
+        var best = S.endlessBest(S.data.difficulty);
+        sub = best.round ? 'Best: round ' + best.round + '  ·  ' + best.score + ' points' : 'New twists every round. How far?';
+      }
+      ctx.fillText(sub, b.x + 66, b.y + 35);
+      if (open) { // play arrow
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath(); ctx.moveTo(b.x + b.w - 30, b.y + 15); ctx.lineTo(b.x + b.w - 30, b.y + 33); ctx.lineTo(b.x + b.w - 15, b.y + 24); ctx.closePath(); ctx.fill();
+      }
+      this.add(b.x, b.y - 4, b.w, b.h + 8, 'endless');
     },
 
     // list geometry (the header above LIST_TOP stays put)
-    LIST_TOP: 156, ROW_H: 76, FOOTER_H: 62,
+    LIST_TOP: 156, LIST_BOTTOM: 576, ROW_H: 76, FOOTER_H: 62,
     contentHeight: function () { return BT.WORLDS.length * this.ROW_H + this.FOOTER_H; },
-    maxScroll: function () { return Math.max(0, this.contentHeight() - (C.H - this.LIST_TOP)); },
+    maxScroll: function () { return Math.max(0, this.contentHeight() - (this.LIST_BOTTOM - this.LIST_TOP)); },
     // scroll that shows the row of level id comfortably (used when opening the list)
     scrollFor: function (id, cur) {
       var L = BT.levelById(id), w = L ? L.world - 1 : 0;
-      var rowTop = w * this.ROW_H, rowBot = rowTop + this.ROW_H + 8, view = C.H - this.LIST_TOP;
+      var rowTop = w * this.ROW_H, rowBot = rowTop + this.ROW_H + 8, view = this.LIST_BOTTOM - this.LIST_TOP;
       var sc = cur;
       if (rowTop - 6 < sc) sc = rowTop - 6;
       if (rowBot > sc + view) sc = rowBot - view;
@@ -125,7 +174,7 @@
       var L = BT.levelById(id);
       if (!L) return null;
       var x = 20 + ((id - 1) % 5) * 66, y = this.LIST_TOP - scroll + (L.world - 1) * this.ROW_H + 14;
-      return { x: x, y: y, w: 56, h: 54, visible: y >= this.LIST_TOP - 10 && y + 54 <= C.H + 10 };
+      return { x: x, y: y, w: 56, h: 54, visible: y >= this.LIST_TOP - 10 && y + 54 <= this.LIST_BOTTOM + 10 };
     },
 
     drawLogo: function (ctx, t) {
@@ -178,7 +227,7 @@
       ctx.fillText(String(L.id), x + w / 2, y + (L.boss ? 24 : 21));
       for (var s = 0; s < 3; s++) R.drawStar(ctx, x + 14 + s * 14, y + 42, 5.5, s < info.stars);
       // tappable only where it shows inside the list (never through the header)
-      var y0 = Math.max(y - 2, this.LIST_TOP), y1 = Math.min(y + h + 2, C.H);
+      var y0 = Math.max(y - 2, this.LIST_TOP), y1 = Math.min(y + h + 2, this.LIST_BOTTOM);
       if (y1 - y0 > 20) this.add(x - 2, y0, w + 4, y1 - y0, 'start:' + L.id);
     },
 
@@ -218,7 +267,7 @@
       ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.font = '13px ' + R.FONT;
       ctx.fillText(app.label(), C.W / 2, 218);
       this.button(ctx, 60, 240, C.W - 120, 48, 'Resume', 'resume', true);
-      this.button(ctx, 60, 300, C.W - 120, 48, 'Restart level', 'restart');
+      this.button(ctx, 60, 300, C.W - 120, 48, app.mode === 'endless' ? 'New run' : 'Restart level', 'restart');
       this.button(ctx, 60, 360, C.W - 120, 48, 'Levels', 'levels');
       this.button(ctx, 60, 420, C.W - 120, 44, 'Sound: ' + (BT.Save.data.muted ? 'off' : 'on'), 'mute');
     },
@@ -302,6 +351,73 @@
         : 'Every level has 3 stars. That is perfect!', C.W / 2, 382, C.W - 96, 19);
       this.button(ctx, 60, 446, C.W - 120, 48, 'Back to levels', 'levels', true);
       this.button(ctx, 60, 502, C.W - 120, 40, 'Fight it again', 'restart');
+    },
+
+    // ---------------- Endless: the card between rounds, and the end of a run ----------------
+    drawRoundCard: function (ctx, app, t) {
+      var R = BT.Render.R, run = app.run, L = app.level, i;
+      this.dim(ctx, 0.5);
+      var n = L.twistNames.length, h = 168 + n * 46 + (run.lifeGained ? 26 : 0), y0 = Math.round(300 - h / 2);
+      this.card(ctx, y0, h);
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#b89bff'; ctx.font = 'bold 13px ' + R.FONT;
+      ctx.fillText('ENDLESS  ·  ' + BT.CONFIG.presets[run.preset].label.toUpperCase(), C.W / 2, y0 + 28);
+      var pop = Math.min(1, t / 0.18);
+      ctx.fillStyle = '#ffffff'; ctx.font = '900 ' + Math.round(40 * (0.7 + 0.3 * pop)) + 'px ' + R.FONT;
+      ctx.fillText('Round ' + run.round, C.W / 2, y0 + 66);
+      var y = y0 + 106;
+      for (i = 0; i < n; i++) {
+        var a = Math.max(0, Math.min(1, (t - 0.15 - i * 0.12) / 0.2));
+        ctx.globalAlpha = a;
+        R.roundRect(ctx, 46, y - 18, C.W - 92, 40, 10); ctx.fillStyle = 'rgba(255,255,255,0.07)'; ctx.fill();
+        ctx.fillStyle = '#ffd35a'; ctx.font = 'bold 15px ' + R.FONT;
+        ctx.fillText(L.twistNames[i], C.W / 2, y - 5);
+        ctx.fillStyle = 'rgba(255,255,255,0.75)'; ctx.font = '12px ' + R.FONT;
+        ctx.fillText(L.tips[i], C.W / 2, y + 11);
+        y += 46;
+      }
+      ctx.globalAlpha = 1;
+      if (run.lifeGained) {
+        ctx.fillStyle = '#ff6b9a'; ctx.font = 'bold 14px ' + R.FONT;
+        ctx.fillText('+1 life!', C.W / 2, y - 4);
+        y += 26;
+      }
+      ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.font = '13px ' + R.FONT;
+      ctx.fillText('Score ' + run.score + '   ·   ' + run.lives + (run.lives === 1 ? ' life' : ' lives'), C.W / 2, y + 2);
+      // the card goes by itself: a bar shows how long it stays
+      var f = Math.max(0, 1 - t / BT.CONFIG.endless.cardSeconds);
+      R.roundRect(ctx, C.W / 2 - 50, y0 + h - 22, 100 * f + 0.01, 4, 2); ctx.fillStyle = 'rgba(79,216,255,0.8)'; ctx.fill();
+      this.add(0, 0, C.W, C.H, 'dismissRound');
+    },
+
+    drawEndlessOver: function (ctx, app, t) {
+      var R = BT.Render.R, run = app.run, res = run.result;
+      this.dim(ctx, 0.62);
+      this.card(ctx, 118, 404);
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#b89bff'; ctx.font = 'bold 13px ' + R.FONT;
+      ctx.fillText('ENDLESS  ·  ' + BT.CONFIG.presets[run.preset].label.toUpperCase(), C.W / 2, 146);
+      ctx.fillStyle = '#ffffff'; ctx.font = 'bold 26px ' + R.FONT;
+      ctx.fillText('Out of balls!', C.W / 2, 178);
+      // round reached and score, each with a new-best badge
+      var cols = [{ x: C.W / 2 - 70, label: 'ROUND', v: res.round, nb: res.newRound }, { x: C.W / 2 + 70, label: 'SCORE', v: res.score, nb: res.newScore }];
+      for (var i = 0; i < 2; i++) {
+        var c = cols[i];
+        R.roundRect(ctx, c.x - 62, 204, 124, 84, 12); ctx.fillStyle = 'rgba(255,255,255,0.07)'; ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.font = 'bold 11px ' + R.FONT; ctx.fillText(c.label, c.x, 222);
+        ctx.fillStyle = '#ffffff'; ctx.font = '900 30px ' + R.FONT; ctx.fillText(String(c.v), c.x, 252);
+        if (c.nb) {
+          var s = 1 + 0.06 * Math.sin(t * 5 + i);
+          R.roundRect(ctx, c.x - 38 * s, 270, 76 * s, 16, 8); ctx.fillStyle = '#ffd35a'; ctx.fill();
+          ctx.fillStyle = '#2b1d00'; ctx.font = 'bold 10px ' + R.FONT; ctx.fillText('NEW BEST!', c.x, 278.5);
+        }
+      }
+      ctx.fillStyle = 'rgba(255,255,255,0.75)'; ctx.font = '13px ' + R.FONT;
+      ctx.fillText('Best on this device: round ' + res.best.round + '  ·  ' + res.best.score + ' points', C.W / 2, 312);
+      ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.font = '12px ' + R.FONT;
+      R.wrapText(ctx, 'Last round: ' + app.level.twistNames.join(' + '), C.W / 2, 336, C.W - 90, 16);
+      this.button(ctx, 60, 376, C.W - 120, 50, 'Play again', 'endlessAgain', true);
+      this.button(ctx, 60, 438, C.W - 120, 46, 'Levels', 'levels');
     },
 
     drawLost: function (ctx, app) {

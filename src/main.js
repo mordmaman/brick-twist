@@ -9,7 +9,10 @@
     canvas: null, ctx: null,
     view: { scale: 1, ox: 0, oy: 0, dpr: 1, cw: 0, ch: 0 },
     scene: 'select',      // select | play
-    overlay: null,        // null | banner | pause | won | lost
+    overlay: null,        // null | banner | pause | won | lost | ending | round | over (the last two: Endless)
+    mode: 'campaign',     // campaign | endless
+    run: null,            // the Endless run: { seed, round, lives, score, preset, worlds, startBest, ... }
+    lockMsgT: 0,          // a tap on the locked Endless bar shows a hint for a moment
     game: null, level: null, world: null,
     acc: 0, last: 0, t: 0, overlayT: 0, endT: 0, starSfx: [false, false, false],
     // level select list: scroll offset, fling speed, and the press being tracked (tap fires on release)
@@ -31,6 +34,7 @@
       this.sel.scroll = BT.UI.scrollFor(this.furthestUnlocked(), 0);
       this.last = performance.now();
       requestAnimationFrame(function f(now) { self.frame(now); requestAnimationFrame(f); });
+      registerServiceWorker();
     },
 
     resize: function () {
@@ -51,24 +55,28 @@
       return (this.scene === 'play' && !this.overlay && this.game) ? this.game : null;
     },
 
-    label: function () { return this.level ? (this.level.world + '-' + ((this.level.id - 1) % 5 + 1) + '  ' + this.level.name) : ''; },
+    label: function () {
+      if (this.mode === 'endless' && this.run) return 'ENDLESS  ·  ROUND ' + this.run.round;
+      return this.level ? (this.level.world + '-' + ((this.level.id - 1) % 5 + 1) + '  ' + this.level.name) : '';
+    },
+    gameFx: function () {
+      return {
+        sound: function (n, a) { BT.Audio.play(n, a); },
+        burst: function (x, y, c, n, k) { BT.Particles.burst(x, y, c, n, k); },
+        ring: function (x, y, r, c) { BT.Particles.ring(x, y, r, c); },
+        text: function (x, y, s, c) { BT.Particles.text(x, y, s, c); },
+        shake: function () {}
+      };
+    },
 
     // ---------------- scenes ----------------
     startLevel: function (id, fromRestart) {
       var L = BT.levelById(id);
       if (!L) return;
+      this.mode = 'campaign'; this.run = null;
       this.level = L;
       this.world = BT.WORLDS[L.world - 1];
-      var self = this;
-      this.game = new BT.Game(L, BT.Save.data.difficulty, {
-        fx: {
-          sound: function (n, a) { BT.Audio.play(n, a); },
-          burst: function (x, y, c, n, k) { BT.Particles.burst(x, y, c, n, k); },
-          ring: function (x, y, r, c) { BT.Particles.ring(x, y, r, c); },
-          text: function (x, y, s, c) { BT.Particles.text(x, y, s, c); },
-          shake: function () {}
-        }
-      });
+      this.game = new BT.Game(L, BT.Save.data.difficulty, { fx: this.gameFx() });
       BT.Particles.clear();
       this.scene = 'play';
       this.acc = 0; this.endT = 0;
@@ -77,7 +85,64 @@
       this.canvas.style.cursor = 'none';
     },
 
+    // ---------------- Endless ----------------
+    endlessOpen: function () { return BT.Endless.unlocked(function (id) { return BT.Save.levelInfo(id).cleared; }); },
+    startEndless: function () {
+      if (!this.endlessOpen()) return;
+      var preset = BT.Save.data.difficulty;
+      this.mode = 'endless';
+      this.run = {
+        seed: (Math.random() * 4294967296) >>> 0, round: 1, preset: preset,
+        lives: BT.CONFIG.presets[preset].lives, score: 0, lifeGained: false,
+        worlds: BT.Endless.completedWorlds(function (id) { return BT.Save.levelInfo(id).cleared; }),
+        startBest: BT.Save.endlessBest(preset), result: null
+      };
+      this.startRound();
+    },
+    startRound: function () {
+      var run = this.run, E = BT.Endless;
+      var L = E.generate({ seed: run.seed, round: run.round, preset: run.preset, worlds: run.worlds });
+      this.level = L;
+      this.world = BT.WORLDS[L.world - 1];
+      this.game = new BT.Game(L, run.preset, { fx: this.gameFx(), seed: (run.seed + run.round * 7919) >>> 0, preset: E.roundPreset(run.preset, run.round) });
+      this.game.lives = run.lives;
+      this.game.score = run.score;
+      BT.Save.recordEndless(run.preset, run.round, run.score);
+      BT.Particles.clear();
+      this.scene = 'play';
+      this.acc = 0; this.endT = 0;
+      this.overlay = 'round'; this.overlayT = 0;
+      this.canvas.style.cursor = 'default';
+    },
+    // A round is cleared: carry lives and score into the next round (an extra life every few rounds).
+    nextRound: function () {
+      var run = this.run, g = this.game, E = BT.CONFIG.endless;
+      run.score = g.score;
+      run.lifeGained = run.round % E.lifeEvery === 0 && g.lives < E.maxLives;
+      run.lives = Math.min(E.maxLives, g.lives + (run.lifeGained ? 1 : 0));
+      run.round++;
+      this.startRound();
+    },
+    endRun: function () {
+      var run = this.run;
+      run.score = this.game.score;
+      BT.Save.recordEndless(run.preset, run.round, run.score);
+      run.result = {
+        round: run.round, score: run.score, best: BT.Save.endlessBest(run.preset),
+        newRound: run.round > run.startBest.round, newScore: run.score > run.startBest.score
+      };
+      this.overlay = 'over'; this.overlayT = 0; this.canvas.style.cursor = 'default';
+    },
+
     toSelect: function () {
+      if (this.mode === 'endless') {
+        if (this.run && this.game) BT.Save.recordEndless(this.run.preset, this.run.round, this.game.score);
+        this.mode = 'campaign'; this.run = null; this.level = null;
+        this.scene = 'select'; this.overlay = null; this.game = null;
+        this.sel.vel = 0; this.sel.press = null;
+        this.canvas.style.cursor = 'default';
+        return;
+      }
       var from = this.level ? this.level.id : this.furthestUnlocked();
       if (this.overlay === 'won' || this.overlay === 'ending') from = Math.min(BT.LEVELS.length, from + 1);
       this.scene = 'select'; this.overlay = null; this.game = null;
@@ -151,6 +216,8 @@
     onAction: function (a) {
       if (a === 'space' || a === 'enter') {
         if (this.overlay === 'banner') return this.doAction('dismissBanner');
+        if (this.overlay === 'round') return this.doAction('dismissRound');
+        if (this.overlay === 'over' && a === 'enter') return this.doAction('endlessAgain');
         if (this.overlay === 'pause') return this.doAction('resume');
         if (this.overlay === 'won' && a === 'enter') return this.doAction(BT.levelById(this.level.id + 1) ? 'next' : 'levels');
         if (this.overlay === 'ending' && a === 'enter') return this.doAction('levels');
@@ -177,11 +244,18 @@
         return;
       }
       if (a.indexOf('diff:') === 0) { BT.Save.setDifficulty(a.slice(5)); BT.Audio.play('gate'); return; }
+      if (a === 'endless') {
+        if (this.endlessOpen()) this.startEndless();
+        else { BT.Audio.play('locked'); this.lockMsgT = 2.5; }
+        return;
+      }
       switch (a) {
         case 'mute': BT.Save.setMuted(!BT.Save.data.muted); BT.Audio.setMuted(BT.Save.data.muted); break;
         case 'pause': this.overlay = 'pause'; this.overlayT = 0; this.canvas.style.cursor = 'default'; break;
         case 'resume': this.overlay = null; this.last = performance.now(); this.acc = 0; this.canvas.style.cursor = 'none'; break;
-        case 'restart': this.startLevel(this.level.id, true); break;
+        case 'restart': if (this.mode === 'endless') this.startEndless(); else this.startLevel(this.level.id, true); break;
+        case 'endlessAgain': this.startEndless(); break;
+        case 'dismissRound': this.overlay = null; this.acc = 0; this.canvas.style.cursor = 'none'; break;
         case 'levels': this.toSelect(); break;
         case 'next': if (BT.levelById(this.level.id + 1)) this.startLevel(this.level.id + 1); else this.toSelect(); break;
         case 'dismissBanner':
@@ -197,7 +271,9 @@
       this.last = now;
       this.t += dt;
       this.overlayT += dt;
+      if (this.lockMsgT > 0) this.lockMsgT -= dt;
       var g = this.game;
+      if (this.overlay === 'round' && this.overlayT > BT.CONFIG.endless.cardSeconds) this.doAction('dismissRound');
       if (this.scene === 'play' && g && !this.overlay) {
         this.acc += dt * g.timeScale;
         var n = 0;
@@ -209,7 +285,9 @@
         BT.Particles.update(dt * g.timeScale);
         if (g.state === 'won' || g.state === 'lost') {
           this.endT += dt;
-          if (this.endT > (g.state === 'won' ? C.winDelay : 0.9)) {
+          if (this.endT > (g.state === 'won' ? C.winDelay : 0.9) && this.mode === 'endless') {
+            if (g.state === 'won') this.nextRound(); else this.endRun();
+          } else if (this.endT > (g.state === 'won' ? C.winDelay : 0.9)) {
             if (g.state === 'won') {
               BT.Save.record(this.level.id, g.result.stars, g.result.score);
               this.starSfx = [false, false, false];
@@ -242,21 +320,38 @@
       if (this.scene === 'select') {
         BT.UI.drawSelect(ctx, this, this.t);
       } else if (this.game) {
-        var g = this.game, seen = BT.Save.data.seen[this.level.twist];
+        var g = this.game, seen = BT.Save.data.seen[this.level.twist], endless = this.mode === 'endless';
         BT.Render.drawPlay(ctx, g, this.world, v.scale * v.dpr, {
           label: this.label(),
           hint: this.overlay ? null : (g.livesLost === 0 && g.clock === 0 ? 'Tap to launch' : 'Tap to go again'),
-          sub: seen && g.clock === 0 && !this.overlay ? this.level.banner : null
+          sub: (seen || endless) && g.clock === 0 && !this.overlay ? (endless ? this.level.twistNames.join('  +  ') : this.level.banner) : null
         });
         if (this.overlay === 'banner') BT.UI.drawBanner(ctx, this, this.overlayT);
         else if (this.overlay === 'pause') BT.UI.drawPause(ctx, this);
         else if (this.overlay === 'won') BT.UI.drawWon(ctx, this, this.overlayT);
         else if (this.overlay === 'ending') BT.UI.drawEnding(ctx, this, this.overlayT);
         else if (this.overlay === 'lost') BT.UI.drawLost(ctx, this);
+        else if (this.overlay === 'round') BT.UI.drawRoundCard(ctx, this, this.overlayT);
+        else if (this.overlay === 'over') BT.UI.drawEndlessOver(ctx, this, this.overlayT);
       }
       ctx.restore();
     }
   };
+
+  // Offline play and installing (sw.js). Only where it can work: a secure http(s) page. Never throws, and stays
+  // quiet where service workers are refused (file://, a sandboxed iframe, private modes).
+  function registerServiceWorker() {
+    try {
+      if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
+      if (!window.isSecureContext || (location.protocol !== 'https:' && location.protocol !== 'http:')) return;
+      var go = function () {
+        try {
+          navigator.serviceWorker.register('sw.js', { scope: './', updateViaCache: 'none' }).catch(function () {});
+        } catch (e) {}
+      };
+      if (document.readyState === 'complete') go(); else window.addEventListener('load', go);
+    } catch (e) {}
+  }
 
   BT.App = App;
   if (typeof document !== 'undefined') {

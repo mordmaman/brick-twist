@@ -6,12 +6,27 @@
   var C = BT.CONFIG;
 
   function defaults() {
-    return { v: C.saveVersion, progress: {}, difficulty: 'normal', muted: false, seen: {} };
+    return { v: C.saveVersion, progress: {}, difficulty: 'normal', muted: false, seen: {}, endless: {} };
+  }
+
+  // Endless bests, one entry per difficulty: { round, score }. Unknown or broken entries are dropped.
+  function cleanEndless(raw) {
+    var out = {};
+    if (!raw || typeof raw !== 'object') return out;
+    for (var k in C.presets) {
+      var e = raw[k];
+      if (!e || typeof e !== 'object') continue;
+      var round = Math.max(0, Math.floor(+e.round || 0)), score = Math.max(0, Math.floor(+e.score || 0));
+      if (round || score) out[k] = { round: round, score: score };
+    }
+    return out;
   }
 
   // Bring older save shapes up to date. Never throws; unknown data falls back to defaults.
   //   v1: { version: 1, stars: { "<levelId>": n }, best: { "<levelId>": score }, diff: 'normal', sound: true }
   //   v2: { v: 2, progress: { "<levelId>": { stars, best, cleared } }, difficulty, muted, seen }
+  //       phase 4 adds endless: { "<preset>": { round, score } } (an optional field, so no version bump:
+  //       older v2 saves load as they are, with no Endless bests yet)
   function migrate(raw) {
     var d = defaults();
     if (!raw || typeof raw !== 'object') return d;
@@ -36,6 +51,7 @@
     if (raw.difficulty && C.presets[raw.difficulty]) d.difficulty = raw.difficulty;
     d.muted = !!raw.muted;
     if (raw.seen && typeof raw.seen === 'object') for (var s in raw.seen) d.seen[s] = !!raw.seen[s];
+    d.endless = cleanEndless(raw.endless);
     return d;
   }
 
@@ -84,6 +100,20 @@
       var n = 0;
       for (var k in this.data.progress) n += this.data.progress[k].stars || 0;
       return n;
+    },
+    // Endless: best round reached and best score, per difficulty. Returns which of them are new bests.
+    endlessBest: function (preset) {
+      var e = this.data.endless && this.data.endless[preset];
+      return { round: e ? e.round : 0, score: e ? e.score : 0 };
+    },
+    recordEndless: function (preset, round, score) {
+      if (!C.presets[preset]) return { round: false, score: false };
+      var cur = this.endlessBest(preset), res = { round: round > cur.round, score: score > cur.score };
+      if (!res.round && !res.score) return res;
+      if (!this.data.endless) this.data.endless = {};
+      this.data.endless[preset] = { round: Math.max(cur.round, round | 0), score: Math.max(cur.score, score | 0) };
+      this.write();
+      return res;
     },
     markSeen: function (key) { if (!this.data.seen[key]) { this.data.seen[key] = true; this.write(); } },
     setDifficulty: function (d) { if (C.presets[d]) { this.data.difficulty = d; this.write(); } },

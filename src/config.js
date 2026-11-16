@@ -173,6 +173,27 @@
       }
     },
 
+    // Endless mode (see endless.js). Values given as [a, b] go from a in round 1 to b once the ramp is done.
+    endless: {
+      unlockAll: false,         // testing: Endless open from the start, with every world's twists in the pool
+      unlockAfterLevel: 5,      // Endless opens once this level (the end of World 1) is cleared
+      threeFrom: 8,             // from this round on a round has three twists instead of two
+      lifeEvery: 3,             // an extra life every this many rounds cleared
+      maxLives: 9,
+      ramp: 16,                 // rounds over which layouts go from gentle to their hardest
+      rows: [5, 9],             // brick rows in the layout
+      density: [0.62, 0.9],     // share of a pattern's cells that get a brick
+      armour: [0.06, 0.38],     // share of bricks with armour
+      armour3From: 9,           // from this round some armour takes three hits
+      steel: [0, 3],            // steel shelves (pairs)
+      heat: [3.5, 8],           // how nasty the twist mix may be (each twist has a heat of 1 to 3)
+      speedStartStep: 5, speedMaxStep: 8, speedRounds: 14, // ball start / top speed rise per round (px/s), for this many rounds
+      hazardStep: 0.02, hazardRounds: 15,                   // twist hazards get a little stronger each round
+      capsuleChance: [0.16, 0.1],
+      layoutWeight: 0.35,       // how often Fuse / Lock and Key are drawn compared with a rule twist
+      cardSeconds: 2.6          // the "Round N" card goes by itself after this long (or on a tap)
+    },
+
     touch: { tapMaxMs: 280, tapMaxMove: 14 },
 
     saveKey: 'brick-twist-save',
