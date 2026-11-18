@@ -424,7 +424,7 @@
         if (g.wrapX) x = g.wrapPos(x);
         else if (x < b.r) { x = b.r; vx = -vx; }
         else if (x > C.W - b.r) { x = C.W - b.r; vx = -vx; }
-        if (y < C.TOP + b.r) { y = C.TOP + b.r; vy = -vy; }
+        if (y < g.topY + b.r) { y = g.topY + b.r; vy = -vy; }
         var stop = false;
         for (var i = 0; i < pl.length; i++) {
           var dx = x - pl[i].x, dy = y - pl[i].y;
@@ -733,7 +733,7 @@
       if (layer !== 'front') return;
       // legend under the HUD: which colour is solid right now (shape + word, not just colour)
       var s = r.s, red = s.solid === 'red';
-      var x = r.p.legendX || C.W / 2, y = C.TOP + (r.p.legendY || 10);
+      var x = r.p.legendX || C.W / 2, y = g.topY + (r.p.legendY || 10);
       ctx.save();
       R.roundRect(ctx, x - 62, y - 8, 124, 16, 8);
       ctx.fillStyle = 'rgba(5,7,16,0.75)'; ctx.fill();
@@ -780,7 +780,7 @@
     render: function (ctx, g, r, layer, R) {
       if (layer !== 'front') return;
       // metronome under the HUD: a dot swings from side to side, ticking on each switch
-      var s = r.s, f = 1 - s.toFlip / s.half, x0 = C.W / 2 - 60, x1 = C.W / 2 + 60, y = C.TOP + 10;
+      var s = r.s, f = 1 - s.toFlip / s.half, x0 = C.W / 2 - 60, x1 = C.W / 2 + 60, y = g.topY + 10;
       var bx = s.active === 0 ? x0 + (x1 - x0) * f : x1 - (x1 - x0) * f;
       ctx.save();
       R.roundRect(ctx, x0 - 10, y - 7, x1 - x0 + 20, 14, 7);
@@ -1497,7 +1497,7 @@
       // HUD: heat of the hottest ball, as flame pips; when red hot, how many bricks it will burn through
       var best = null;
       for (i = 0; i < g.balls.length; i++) if (!best || (g.balls[i].heat || 0) + (g.balls[i].hot ? 99 : 0) > (best.heat || 0) + (best.hot ? 99 : 0)) best = g.balls[i];
-      var x = C.W / 2, y = C.TOP + 10, hot = best && best.hot;
+      var x = C.W / 2, y = g.topY + 10, hot = best && best.hot;
       R.roundRect(ctx, x - 64, y - 8, 128, 16, 8);
       ctx.fillStyle = hot ? 'rgba(90,20,0,0.85)' : 'rgba(5,7,16,0.75)'; ctx.fill();
       ctx.fillStyle = '#ffffff'; ctx.font = 'bold 10px ' + R.FONT; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
@@ -1600,7 +1600,7 @@
       // front: the storm cloud over the target column, the warning sign at paddle height, the bolt
       if (s.phase === 'warn') {
         var k2 = 1 - s.timer / this.telegraph(g, r);
-        this.cloud(ctx, s.x, C.TOP + 12, 1 + 0.25 * k2, k2);
+        this.cloud(ctx, s.x, g.topY + 12, 1 + 0.25 * k2, k2);
         var under = pd.x + pd.w / 2 > s.x - half && pd.x - pd.w / 2 < s.x + half;
         var wy = pd.y + 26, a = 0.6 + 0.4 * Math.sin(s.t * 20);
         ctx.fillStyle = under ? 'rgba(255,90,90,' + a.toFixed(3) + ')' : 'rgba(255,230,120,' + (a * 0.7).toFixed(3) + ')';
@@ -1691,7 +1691,7 @@
       if (Math.abs(mx) < 1e-3 && Math.abs(my) < 1e-3) return false;
       var nx = b.bx + mx, ny = b.by + my, ox = b.x - b.bx, oy = b.y - b.by; // other rules' offsets carry over
       var x = nx + ox, y = ny + oy;
-      if (x < g.wallL + 1 || x + b.w > g.wallR - 1 || y < C.TOP + 3 || y + b.h > r.p.maxY) return false;
+      if (x < g.wallL + 1 || x + b.w > g.wallR - 1 || y < g.topY + 3 || y + b.h > r.p.maxY) return false;
       if (g.rectBlocked(x, y, b.w, b.h, b, 1)) return false;
       if (g.ballNear(x, y, b.w, b.h, 1.5)) return false;
       b.bx = nx; b.by = ny; b.x = x; b.y = y;

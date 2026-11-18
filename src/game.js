@@ -134,6 +134,32 @@
     this.wallR = C.W;
     this.paddleIce = null;    // { follow, grip, bounce }: paddle slides with momentum instead of following directly
     this.deflectors = [];     // angled panels the ball bounces off, see addDeflector
+    // act two (phase 5), all off by default:
+    this.powers = [];         // player powers used by tapping (see addPower / tapPowers)
+    this.warp = null;         // world time factors by name (see setWarp); null = real time
+    this.worldScale = 1;
+    this.realDt = 0;
+    this.topY = C.TOP + this.powerStrip(this.level); // the top wall (lower under a power strip; a tall level moves it up)
+    this.cam = 0;             // vertical camera offset for a tall level (world y at the top of the screen = cam)
+    this.viewFlip = false;    // the field is drawn upside down (controls follow the screen)
+    this.viewAngle = 0;       // the drawn rotation of the field, 0 .. PI
+    this.inputLock = false;   // the paddle ignores the finger for a moment (during a Flip turn)
+  };
+
+  // Levels with player powers show them in a strip under the HUD, so the field starts that much lower.
+  G.powerStrip = function (level) {
+    var rl = (level && level.rules) || [];
+    for (var i = 0; i < rl.length; i++) {
+      var m = BT.Rules.registry[rl[i].id];
+      if (m && m.power) return level.clear === 'boss' ? C.powerStripBoss : C.powerStrip;
+    }
+    return 0;
+  };
+
+  // Slow the world by a named factor (1 removes it). Several factors multiply.
+  G.setWarp = function (name, v) {
+    if (!this.warp) { if (v === 1) return; this.warp = {}; }
+    if (v === 1) delete this.warp[name]; else this.warp[name] = v;
   };
 
   G.newBall = function (x, y, vx, vy) {
@@ -145,7 +171,8 @@
       pierce: 0,              // bricks it may still burn straight through without bouncing
       sizeMul: 1,             // speed factor for this kind of ball (rules set it: e.g. a big slow ball)
       zoneMul: 1,             // speed factor from where the ball is (rules set it: e.g. under water)
-      kind: null, deflectChain: 0
+      kind: null, deflectChain: 0,
+      minVy: null             // act two: a rule may lower this ball's minimum vertical speed (null = CONFIG)
     };
     this.balls.push(ball);
     return ball;
@@ -173,17 +200,21 @@
 
   G.normalizeBall = function (ball) {
     var s = Math.min(this.speed() * ball.boost * ball.sizeMul * ball.zoneMul, C.ball.absMaxSpeed);
-    P.normalizeVel(ball, s, C.ball.minVyFrac);
+    P.normalizeVel(ball, s, ball.minVy != null ? ball.minVy : C.ball.minVyFrac);
   };
 
   // ---------- input API ----------
   G.dragBy = function (dx) {
+    if (this.inputLock) return;
     var s = C.paddle.touchSensitivity * (this.eff.flip > 0 ? -1 : 1);
+    if (this.viewFlip) s = -s; // the field is drawn upside down: a drag to the left still moves the paddle left on screen
     this.paddle.targetX += dx * s;
     this.clampTarget();
   };
   G.pointTo = function (x) {
+    if (this.inputLock) return;
     this.paddle.targetX = this.eff.flip > 0 ? C.W - x : x;
+    if (this.viewFlip) this.paddle.targetX = C.W - this.paddle.targetX;
     if (this.wrapX) this.paddle.targetX = this.paddle.x + this.wrapDelta(this.paddle.targetX - this.paddle.x);
     this.clampTarget();
   };
@@ -205,7 +236,34 @@
       this.state = 'play';
       this.sinceLaunch = 0;
     }
+    if (this.powers.length) { this.tapPowers(released); return; }
     if (this.eff.laser > 0) this.fireLaser();
+  };
+
+  // Act two: player powers (rules with power: true that call g.addPower in init). Precedence for one tap:
+  //   1. launching or releasing a caught ball (above): that tap does nothing else;
+  //   2. a timed power whose moment it is (Power Shot while its ring is closing on the paddle);
+  //   3. lasers, while the Laser capsule is on;
+  //   4. the level's free power (Slow-Mo or Safety Wall), the first one listed if a level ever had two.
+  // Passive powers (Curveball) never use a tap. A tap a power cannot use is simply ignored: never a penalty.
+  // A drag never gets here (Input only calls tap for a quick, still touch).
+  G.addPower = function (inst) { this.powers.push(inst); return inst; };
+  G.tapPowers = function (released) {
+    if (released || this.state !== 'play') return;
+    var i, r;
+    for (i = 0; i < this.powers.length; i++) {
+      r = this.powers[i];
+      if (r.mod.kind === 'timed' && r.mod.onTap(this, r)) return;
+    }
+    if (this.eff.laser > 0) { this.fireLaser(); return; }
+    for (i = 0; i < this.powers.length; i++) {
+      r = this.powers[i];
+      if (r.mod.kind === 'free' && r.mod.onTap(this, r)) return;
+    }
+  };
+  G.powerOf = function (id) {
+    for (var i = 0; i < this.powers.length; i++) if (this.powers[i].id === id) return this.powers[i];
+    return null;
   };
 
   G.releaseBall = function (b) {
@@ -241,13 +299,17 @@
   // ---------- main step ----------
   G.step = function (dt) {
     if (this.state === 'won' || this.state === 'lost') { this.t += dt; return; }
+    // Act two: rules may slow the world (Slow-Mo, the Flip turn) with setWarp; the paddle keeps real time.
+    var paddleDt = dt;
+    this.realDt = dt;
+    if (this.warp) { var ws = 1; for (var wk in this.warp) ws *= this.warp[wk]; this.worldScale = ws; if (ws !== 1) dt *= ws; }
     this.t += dt;
     if (this.state === 'play' || this.state === 'clearing') { this.clock += dt; this.sinceLaunch += dt; }
     if (this.shakeAmt > 0) this.shakeAmt = Math.max(0, this.shakeAmt - C.shake.decay * dt);
     if (this.netFlash > 0) this.netFlash -= dt;
 
     this.updateEffects(dt);
-    this.updatePaddle(dt);
+    this.updatePaddle(paddleDt);
 
     // rules move bricks: reset offsets, let rules write base positions / offsets, then finalize
     var bs = this.bricks, i;
@@ -307,6 +369,8 @@
     p.w += (tw - p.w) * Math.min(1, cp.widthLerp * dt);
 
     var kd = this.keyDir * (e.flip > 0 ? -1 : 1);
+    if (this.viewFlip) kd = -kd;
+    if (this.inputLock) kd = 0;
     if (kd !== 0) {
       var want = kd * cp.keySpeed;
       var dv = want - p.kv, maxDv = cp.keyAccel * dt;
@@ -410,7 +474,7 @@
       if (b.x < this.wallL + b.r) { b.x = this.wallL + b.r; if (b.vx < 0) b.vx = -b.vx; }
       if (b.x > this.wallR - b.r) { b.x = this.wallR - b.r; if (b.vx > 0) b.vx = -b.vx; }
     }
-    if (b.y < C.TOP + b.r && !this.topOpen) { b.y = C.TOP + b.r; if (b.vy < 0) b.vy = -b.vy; }
+    if (b.y < this.topY + b.r && !this.topOpen) { b.y = this.topY + b.r; if (b.vy < 0) b.vy = -b.vy; }
     if (!(b.x === b.x) || !(b.y === b.y)) { // NaN guard
       b.x = this.paddle.x; b.y = 400; b.vx = 0; b.vy = -1; this.normalizeBall(b);
     }
@@ -434,9 +498,9 @@
       else if (b.x < this.wallL + b.r) { b.x = this.wallL + b.r; if (b.vx < 0) { b.vx = -b.vx; this.fx.sound('wall'); } }
       else if (b.x > this.wallR - b.r) { b.x = this.wallR - b.r; if (b.vx > 0) { b.vx = -b.vx; this.fx.sound('wall'); } }
       if (this.topOpen) {
-        if (b.y + b.r < C.TOP) { b.dead = true; b.exitTop = true; return; }
+        if (b.y + b.r < this.topY) { b.dead = true; b.exitTop = true; return; }
       }
-      else if (b.y < C.TOP + b.r) { b.y = C.TOP + b.r; if (b.vy < 0) { b.vy = -b.vy; this.fx.sound('wall'); } }
+      else if (b.y < this.topY + b.r) { b.y = this.topY + b.r; if (b.vy < 0) { b.vy = -b.vy; this.fx.sound('wall'); } }
 
       // paddle
       if (b.vy > 0 && !p.off) {
@@ -470,7 +534,7 @@
         b.x += HIT.nx * HIT.depth; b.y += HIT.ny * HIT.depth;
         var nx = HIT.nx, ny = HIT.ny;
         var reflected = P.reflect(b, nx, ny);
-        if (reflected) P.normalizeVel(b, speed, C.ball.minVyFrac);
+        if (reflected) P.normalizeVel(b, speed, b.minVy != null ? b.minVy : C.ball.minVyFrac);
         if (!damaged && reflected) {
           damaged = true;
           this.hitBrick(hitB, b, 'ball');
@@ -672,6 +736,7 @@
     if (C.capsule.bad.indexOf(k) >= 0 && !allowBad) return false;
     if (k === 'flip' && !C.capsule.flipEnabled) return false;
     if (k === 'life' && this.lives >= 9) return false;
+    if (this.level.noCapsules && this.level.noCapsules.indexOf(k) >= 0) return false; // e.g. no lasers where taps are powers
     return true;
   };
 
@@ -759,7 +824,7 @@
       var L = this.lasers[i];
       if (!L.alive) continue;
       L.y -= C.laser.speed * dt;
-      if (L.y < C.TOP) { L.alive = false; continue; }
+      if (L.y < this.topY) { L.alive = false; continue; }
       var consumed = false;
       for (var r = 0; r < this.rules.length && !consumed; r++) {
         var ru = this.rules[r];
@@ -1019,6 +1084,9 @@
   G.removeRule = function (inst) {
     var i = this.rules.indexOf(inst);
     if (i >= 0) this.rules.splice(i, 1);
+    if (inst.mod.onRemove) inst.mod.onRemove(this, inst); // act two: a borrowed rule tidies up after itself
+    i = this.powers.indexOf(inst);
+    if (i >= 0) this.powers.splice(i, 1);
   };
 
   // Count of bricks the level needs destroyed (for HUD/tests).

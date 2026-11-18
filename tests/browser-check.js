@@ -2,7 +2,9 @@
 // Run: node tests/browser-check.js [outDir]
 // Checks: boots with no console errors, no network requests, level starts via real taps, touch drag moves
 // the paddle, ball moves and bricks break, every level runs, the level select scrolls by touch and wheel
-// without starting levels by accident, the ending screen after the final boss, works in a sandboxed iframe.
+// without starting levels by accident, the act-one card after The Machine and the ending screen after the final
+// boss, works in a sandboxed iframe. Act two: powers used by real touch taps (and never by a drag), Flip mid-turn
+// and upside down, Skyscraper at several heights, each power in use, eleven worlds in the level select.
 // Endless: locked on a fresh save, opens after World 1, a run starts by touch, plays, advances a round, shows
 // the results card, bests persist; many generated rounds render without errors.
 // PWA (served over HTTP on localhost under /brick-twist/, like GitHub Pages): manifest valid and linked, icons
@@ -22,8 +24,8 @@ var ROOT = path.join(__dirname, '..');
 var OUT = process.argv[2] || path.join(ROOT, 'tests', 'shots');
 var URL = 'file://' + path.join(ROOT, 'index.html');
 var fails = 0;
-var BT_BOSS_IDS = [20, 25, 30, 35, 40];
-var LAST = 40;
+var BT_BOSS_IDS = [20, 25, 30, 35, 40, 45, 50, 55];
+var LAST = 55;
 function ok(c, m) { console.log((c ? '  ok   ' : '  FAIL ') + m); if (!c) fails++; }
 
 (async function () {
@@ -84,7 +86,8 @@ function ok(c, m) { console.log((c ? '  ok   ' : '  FAIL ') + m); if (!c) fails+
   await page.evaluate(function () {
     window.__bot = setInterval(function () {
       var g = BT.App.game; if (!g || !g.balls.length) return;
-      var b = g.balls[0]; g.pointTo(b.x + Math.sin(performance.now() / 700) * 18); if (b.stuck) g.tap();
+      var b = g.balls[0], tx = b.x + Math.sin(performance.now() / 700) * 18;
+      g.pointTo(g.viewFlip ? 360 - tx : tx); if (b.stuck) g.tap(); // (upside down, the screen is mirrored)
     }, 16);
   });
   await page.waitForTimeout(2500);
@@ -129,7 +132,7 @@ function ok(c, m) { console.log((c ? '  ok   ' : '  FAIL ') + m); if (!c) fails+
   for (id = 16; id <= LAST; id++) {
     var bn = await page.evaluate(function (id) { BT.Save.data.seen = {}; BT.App.startLevel(id); return { overlay: BT.App.overlay, banner: BT.App.level.banner }; }, id);
     ok(bn.overlay === 'banner' && bn.banner.length > 10, 'level ' + id + ' shows its first-time banner');
-    if (id === 16 || id === 21 || id === 24 || id === 28 || id === 39 || id === 40) await page.screenshot({ path: path.join(OUT, 'banner-' + id + '.png') });
+    if (id === 16 || id === 21 || id === 24 || id === 28 || id === 39 || id === 40 || id === 41 || id === 45 || id === 49 || id === 52 || id === 54 || id === 55) await page.screenshot({ path: path.join(OUT, 'banner-' + id + '.png') });
   }
   await page.evaluate(function () { BT.App.doAction('dismissBanner'); });
   // results card: force a win on level 3
@@ -177,9 +180,25 @@ function ok(c, m) { console.log((c ? '  ok   ' : '  FAIL ') + m); if (!c) fails+
   await page.waitForTimeout(200);
   await page.screenshot({ path: path.join(OUT, '11-select-world6.png') });
 
-  // all eight worlds: scroll by touch drag. A drag never starts a level; a tap after it does.
+  // a phase-4 player who has beaten The Machine: World 9 is open and in view when the list opens
+  var p4 = await page.evaluate(function () {
+    BT.Save.data.progress = {};
+    for (var i = 1; i <= 40; i++) BT.Save.data.progress[i] = { stars: (i % 3) + 1, best: 100, cleared: true };
+    BT.App.level = null; BT.App.toSelect();
+    return { u41: BT.Save.isUnlocked(41), u42: BT.Save.isUnlocked(42), r41: BT.UI.tileRect(41, BT.App.sel.scroll) };
+  });
+  ok(p4.u41 && !p4.u42 && p4.r41.visible, 'after The Machine, level 41 (World 9) is unlocked and in view; 42 stays locked');
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: path.join(OUT, '16-select-world9.png') });
+  var t41 = await pt(p4.r41.x + 28, p4.r41.y + 27);
+  await page.touchscreen.tap(t41.x, t41.y);
+  await page.waitForTimeout(200);
+  ok(await page.evaluate(function () { return BT.App.scene === 'play' && BT.App.level.id === 41; }), 'tapping the World 9 tile starts level 41');
+  await page.evaluate(function () { BT.App.toSelect(); });
+
+  // all eleven worlds: scroll by touch drag. A drag never starts a level; a tap after it does.
   await page.evaluate(function () {
-    for (var i = 1; i <= 39; i++) BT.Save.data.progress[i] = { stars: (i % 3) + 1, best: 100, cleared: true };
+    for (var i = 1; i <= 54; i++) BT.Save.data.progress[i] = { stars: (i % 3) + 1, best: 100, cleared: true };
     BT.App.level = null; BT.App.toSelect(); BT.App.sel.scroll = 0;
   });
   await page.waitForTimeout(150);
@@ -191,16 +210,23 @@ function ok(c, m) { console.log((c ? '  ok   ' : '  FAIL ') + m); if (!c) fails+
   await touch('touchEnd', 0, 0);
   await page.waitForTimeout(600);
   var sc1 = await page.evaluate(function () { return { scene: BT.App.scene, scroll: BT.App.sel.scroll, max: BT.UI.maxScroll() }; });
-  ok(sc1.max > 0, 'eight worlds do not fit: the list scrolls (range ' + sc1.max.toFixed(0) + 'px)');
-  ok(sc1.scene === 'select' && sc1.scroll > sc1.max * 0.8, 'touch drag scrolls the level list (to ' + sc1.scroll.toFixed(0) + ') and does not start ' + startTile);
+  ok(sc1.max > 0, 'eleven worlds do not fit: the list scrolls (range ' + sc1.max.toFixed(0) + 'px)');
+  ok(sc1.scene === 'select' && sc1.scroll > sc1.max * 0.25, 'touch drag scrolls the level list (to ' + sc1.scroll.toFixed(0) + ') and does not start ' + startTile);
+  for (var dr = 0; dr < 3; dr++) { // keep dragging down to the end of the list
+    await touch('touchStart', dragA.x, dragA.y);
+    for (i = 1; i <= 10; i++) { await touch('touchMove', dragA.x, dragA.y + (dragB.y - dragA.y) * i / 10); await page.waitForTimeout(16); }
+    await touch('touchEnd', 0, 0); await page.waitForTimeout(500);
+  }
+  var sc2 = await page.evaluate(function () { return { scene: BT.App.scene, scroll: BT.App.sel.scroll, max: BT.UI.maxScroll() }; });
+  ok(sc2.scene === 'select' && sc2.scroll > sc2.max - 2, 'repeated drags reach the end of the list (World 11) without starting a level');
   await page.screenshot({ path: path.join(OUT, '13-select-bottom.png') });
-  var r40 = await page.evaluate(function () { return BT.UI.tileRect(40, BT.App.sel.scroll); });
-  ok(r40.visible, 'after scrolling, the World 8 row is in view');
-  var t40 = await pt(r40.x + 28, r40.y + 27);
-  await page.touchscreen.tap(t40.x, t40.y);
+  var r55 = await page.evaluate(function () { return BT.UI.tileRect(55, BT.App.sel.scroll); });
+  ok(r55.visible && r55.h >= 50 && r55.w >= 50, 'after scrolling, the World 11 row is in view, tiles still ' + r55.w + 'x' + r55.h + ' (tappable)');
+  var t55 = await pt(r55.x + 28, r55.y + 27);
+  await page.touchscreen.tap(t55.x, t55.y);
   await page.waitForTimeout(200);
-  var st40 = await page.evaluate(function () { return { scene: BT.App.scene, id: BT.App.level && BT.App.level.id }; });
-  ok(st40.scene === 'play' && st40.id === 40, 'tapping the scrolled-in final boss tile starts level 40');
+  var st55 = await page.evaluate(function () { return { scene: BT.App.scene, id: BT.App.level && BT.App.level.id }; });
+  ok(st55.scene === 'play' && st55.id === 55, 'tapping the scrolled-in final boss tile starts level 55');
   // header stays put: a tap on a tile scrolled up under the header does nothing
   await page.evaluate(function () { BT.App.toSelect(); BT.App.sel.scroll = 60; });
   var hidden = await page.evaluate(function () { return BT.UI.tileRect(1, BT.App.sel.scroll); });
@@ -212,22 +238,39 @@ function ok(c, m) { console.log((c ? '  ok   ' : '  FAIL ') + m); if (!c) fails+
     'a tile scrolled under the header cannot be tapped through it');
   await page.evaluate(function () { BT.Save.setDifficulty('normal'); });
 
-  // the ending screen after beating the final boss
+  // beating The Machine now ends act one: its own card, then on to World 9
   await page.evaluate(function () {
     BT.App.startLevel(40, true); var g = BT.App.game; g.tap();
     var r = g.boss; r.s.phase = 2; r.s.phaseHp = 1; r.s.hp = 1; r.s.hitCd = 0;
     r.mod.hitCore(g, r);
   });
   await page.waitForTimeout(2800);
-  var end = await page.evaluate(function () { return { overlay: BT.App.overlay, stars: BT.Save.levelInfo(40).stars }; });
-  ok(end.overlay === 'ending', 'beating The Machine shows the ending screen (overlay ' + end.overlay + ')');
+  var a1 = await page.evaluate(function () { return { overlay: BT.App.overlay, u41: BT.Save.isUnlocked(41) }; });
+  ok(a1.overlay === 'actone' && a1.u41, 'beating The Machine shows the act-one card (overlay ' + a1.overlay + ') and opens World 9');
+  await page.waitForTimeout(1600);
+  await page.screenshot({ path: path.join(OUT, '14-act-one.png') });
+  var on9 = await pt(180, 446);
+  await page.touchscreen.tap(on9.x, on9.y);
+  await page.waitForTimeout(250);
+  ok(await page.evaluate(function () { return BT.App.scene === 'play' && BT.App.level.id === 41; }), 'its "On to World 9" button starts level 41');
+  // the full ending after the final boss
+  await page.evaluate(function () {
+    BT.App.startLevel(55, true); var g = BT.App.game; g.tap();
+    var r = g.boss; r.s.phase = 3; r.s.phaseHp = 1; r.s.hp = 1; r.s.hitCd = 0;
+    r.mod.hitCore(g, r);
+  });
+  await page.waitForTimeout(2800);
+  var end = await page.evaluate(function () { return { overlay: BT.App.overlay, stars: BT.Save.levelInfo(55).stars }; });
+  ok(end.overlay === 'ending', 'beating The Architect shows the ending screen (overlay ' + end.overlay + ')');
   await page.waitForTimeout(1200);
-  await page.screenshot({ path: path.join(OUT, '14-ending.png') });
+  await page.screenshot({ path: path.join(OUT, '15-ending.png') });
   var back = await pt(180, 470);
   await page.touchscreen.tap(back.x, back.y);
   await page.waitForTimeout(200);
   ok(await page.evaluate(function () { return BT.App.scene === 'select'; }), 'the ending screen returns to the level select');
   await page.screenshot({ path: path.join(OUT, '15-select-after-ending.png') });
+
+  await actTwoChecks(page, pt, touch);
   await page.evaluate(function (k) { BT.Save.data = JSON.parse(k); BT.Save.write(); }, sel.keep);
 
   ok(errors.length === 0, 'no console errors or warnings' + (errors.length ? ': ' + errors.slice(0, 5).join(' | ') : ''));
@@ -274,7 +317,7 @@ function ok(c, m) { console.log((c ? '  ok   ' : '  FAIL ') + m); if (!c) fails+
   ok(await page3.evaluate(function () { return BT.App.game.state === 'play'; }) && err3.length === 0, 'space launches; no errors on desktop');
   await page3.screenshot({ path: path.join(OUT, '08-desktop.png') });
   // mouse wheel scrolls the level list
-  await page3.evaluate(function () { for (var i = 1; i <= 39; i++) BT.Save.data.progress[i] = { stars: 1, best: 1, cleared: true }; BT.App.toSelect(); BT.App.sel.scroll = 0; });
+  await page3.evaluate(function () { for (var i = 1; i <= 54; i++) BT.Save.data.progress[i] = { stars: 1, best: 1, cleared: true }; BT.App.toSelect(); BT.App.sel.scroll = 0; });
   await page3.mouse.move(v3.ox + 180 * v3.scale, v3.oy + 400 * v3.scale);
   await page3.mouse.wheel(0, 400);
   await page3.waitForTimeout(200);
@@ -294,6 +337,130 @@ function ok(c, m) { console.log((c ? '  ok   ' : '  FAIL ') + m); if (!c) fails+
   console.log(fails ? fails + ' browser checks FAILED' : 'all browser checks passed');
   process.exit(fails ? 1 : 0);
 })().catch(function (e) { console.error(e); process.exit(2); });
+
+// ------------------------------------------------------------------ act two: powers by touch, Flip, Skyscraper
+async function actTwoChecks(page, pt, touch) {
+  console.log('-- Act two');
+  async function start(id) {
+    await page.evaluate(function (id) { clearInterval(window.__bot); BT.App.startLevel(id, true); }, id);
+    await page.waitForTimeout(150);
+  }
+  async function realTap(x, y) { var q = await pt(x, y); await page.touchscreen.tap(q.x, q.y); }
+  async function realDrag(x0, x1, y) {
+    var a = await pt(x0, y), b = await pt(x1, y);
+    await touch('touchStart', a.x, a.y);
+    for (var i = 1; i <= 8; i++) { await touch('touchMove', a.x + (b.x - a.x) * i / 8, a.y); await page.waitForTimeout(16); }
+    await touch('touchEnd', 0, 0);
+  }
+  // keep the ball in play from the page (paddle under the ball), without tapping
+  async function keepUp() {
+    await page.evaluate(function () {
+      window.__keep = setInterval(function () {
+        var g = BT.App.game; if (!g || !g.balls.length || BT.App.overlay) return;
+        var b = null; g.balls.forEach(function (q) { if (!q.stuck && q.vy > 0 && (!b || q.y > b.y)) b = q; });
+        if (b) { var lx = BT.Physics.predictLandingX(b.x, b.y, b.vx, b.vy, g.paddle.y - 12, b.r, 360 - b.r); g.pointTo(g.viewFlip ? 360 - lx : lx); }
+      }, 16);
+    });
+  }
+  async function stopKeep() { await page.evaluate(function () { clearInterval(window.__keep); }); }
+
+  // ---- Slow-Mo by real taps; a drag never triggers it
+  await start(42);
+  await realTap(180, 400); await page.waitForTimeout(300);
+  ok(await page.evaluate(function () { return BT.App.game.state === 'play'; }), 'Slow-Mo level: a real tap launches the ball');
+  await page.evaluate(function () { var b = BT.App.game.balls[0]; b.x = 180; b.y = 420; b.vx = 60; b.vy = -260; });
+  await keepUp();
+  var before = await page.evaluate(function () { return BT.App.game.paddle.x; });
+  await realDrag(120, 200, 450); await page.waitForTimeout(150);
+  var afterDrag = await page.evaluate(function () { var g = BT.App.game; return { on: g.powerOf('slowmo').s.on, x: g.paddle.x }; });
+  ok(!afterDrag.on, 'a drag never uses a power (Slow-Mo still off after an 80px drag)');
+  await realTap(180, 450); await page.waitForTimeout(400);
+  var sm = await page.evaluate(function () { var g = BT.App.game; return { on: g.powerOf('slowmo').s.on, ws: g.worldScale }; });
+  ok(sm.on && sm.ws < 0.6, 'a real tap starts Slow-Mo (world speed ' + sm.ws.toFixed(2) + ')');
+  await page.screenshot({ path: path.join(OUT, 'power-slowmo.png') });
+  await realTap(180, 450); await page.waitForTimeout(300);
+  ok(await page.evaluate(function () { return !BT.App.game.powerOf('slowmo').s.on; }), 'a second real tap stops it');
+  await stopKeep();
+
+  // ---- Power Shot by a real tap timed to the ring
+  await start(41);
+  await realTap(180, 400); await page.waitForTimeout(200);
+  var shotOk = false;
+  for (var tries = 0; tries < 6 && !shotOk; tries++) {
+    await page.evaluate(function () { var g = BT.App.game, b = g.balls[0]; g.paddle.x = g.paddle.targetX = 180; b.x = 180; b.y = g.paddle.y - 12 - 0.18 * 300 - 30; b.vx = 0; b.vy = 300; });
+    await page.waitForTimeout(90);
+    await realTap(80, 450);
+    await page.waitForTimeout(500);
+    shotOk = await page.evaluate(function () { return BT.App.game.balls.some(function (b) { return b.powered; }) || BT.App.game.powerOf('powershot').s.shots > 0; });
+  }
+  ok(shotOk, 'a real tap while the ring closes makes a Power Shot');
+  await page.evaluate(function () { var g = BT.App.game, b = g.balls[0]; g.powerOf('powershot').s.charge = 1; g.paddle.x = g.paddle.targetX = 180; b.x = 180; b.y = g.paddle.y - 12 - 0.6 * 300; b.vx = 0; b.vy = 300; b.powered = false; });
+  await page.waitForTimeout(470);
+  await page.screenshot({ path: path.join(OUT, 'power-shot-ring.png') });
+  await page.waitForTimeout(80); await realTap(80, 450); await page.waitForTimeout(160);
+  await page.screenshot({ path: path.join(OUT, 'power-shot-powered.png') });
+
+  // ---- Safety Wall by a real tap
+  await start(44);
+  await realTap(180, 400); await page.waitForTimeout(200);
+  await page.evaluate(function () { var g = BT.App.game, b = g.balls[0]; g.paddle.x = g.paddle.targetX = 320; b.x = 40; b.y = 480; b.vx = 0; b.vy = 280; });
+  await realTap(180, 450); await page.waitForTimeout(350);
+  var sw = await page.evaluate(function () { var g = BT.App.game, r = g.powerOf('safetywall'); return { up: r.s.up, charges: r.s.charges, lives: g.lives, saves: r.s.saves }; });
+  ok(sw.up > 0 && sw.charges === 1, 'a real tap raises the Safety Wall and uses a charge');
+  await page.screenshot({ path: path.join(OUT, 'power-wall.png') });
+  await page.waitForTimeout(400);
+  ok(await page.evaluate(function () { return BT.App.game.powerOf('safetywall').s.saves > 0 && BT.App.game.lives === 3; }), 'the wall bounces the ball the paddle missed');
+
+  // ---- Curveball: a real drag while the ball climbs bends it
+  await start(43);
+  await realTap(180, 400); await page.waitForTimeout(150);
+  await page.evaluate(function () { var g = BT.App.game, b = g.balls[0]; g.paddle.x = g.paddle.targetX = 60; b.x = 180; b.y = 460; b.vx = 0; b.vy = -300; b.spin = 1; });
+  await realDrag(60, 300, 500);
+  var cv = await page.evaluate(function () { var b = BT.App.game.balls[0]; return { vx: b.vx, used: BT.App.game.powerOf('curve').s.used }; });
+  ok(cv.vx > 30 && cv.used > 0, 'a real drag to the right while the ball climbs bends it right (vx ' + cv.vx.toFixed(0) + ')');
+  await page.screenshot({ path: path.join(OUT, 'power-curve.png') });
+
+  // ---- The Keeper with all three chips
+  await start(45); await realTap(180, 400); await keepUp(); await page.waitForTimeout(2500);
+  await page.screenshot({ path: path.join(OUT, 'power-keeper.png') }); await stopKeep();
+
+  // ---- Flip: the warning, mid-turn, upside down; controls follow the screen
+  await start(54);
+  await realTap(180, 400); await keepUp();
+  await page.evaluate(function () { var r = BT.App.game.rules[0]; r.s.timer = 0.05; });
+  await page.waitForTimeout(1200);
+  ok(await page.evaluate(function () { return BT.App.game.rules[0].s.phase === 'warn'; }), 'Flip: the countdown shows before the turn');
+  await page.screenshot({ path: path.join(OUT, 'flip-1-warning.png') });
+  await page.waitForFunction(function () { var r = BT.App.game.rules[0]; return r.s.phase === 'turn' && r.s.tt > 0.7; }, null, { timeout: 6000 });
+  var mid = await page.evaluate(function () { var g = BT.App.game; return { a: g.viewAngle, ws: g.worldScale, lock: g.inputLock }; });
+  ok(mid.a > 0.5 && mid.a < 2.7 && mid.ws < 0.2 && mid.lock, 'Flip: mid-turn the field is part way round, the world all but stopped (' + mid.ws + ')');
+  await page.screenshot({ path: path.join(OUT, 'flip-2-midturn.png') });
+  await page.waitForFunction(function () { var r = BT.App.game.rules[0]; return r.s.phase === 'idle' && r.s.down; }, null, { timeout: 4000 });
+  await page.waitForTimeout(600);
+  await page.screenshot({ path: path.join(OUT, 'flip-3-upside-down.png') });
+  await stopKeep();
+  var x0 = await page.evaluate(function () { var g = BT.App.game; g.paddle.x = g.paddle.targetX = 180; return 180; });
+  await realDrag(220, 160, 300); await page.waitForTimeout(150);
+  var fx = await page.evaluate(function () { var g = BT.App.game, v = BT.App.view; return { x: g.paddle.x, flip: g.viewFlip }; });
+  ok(fx.flip && fx.x > x0 + 40, 'Flip: upside down, a real drag to the left moves the paddle left on the screen (world x ' + x0 + ' -> ' + fx.x.toFixed(0) + ')');
+
+  // ---- Skyscraper at several heights
+  await start(52);
+  await realTap(180, 400); await keepUp();
+  var heights = [0, -400, -800, -1150], hi;
+  for (hi = 0; hi < heights.length; hi++) {
+    await page.evaluate(function (y) { var g = BT.App.game, b = g.balls[0]; if (y < 0) { b.x = 150; b.y = y + 300; b.vx = 40; b.vy = -260; } }, heights[hi]);
+    await page.waitForTimeout(hi ? 900 : 300);
+    var cam = await page.evaluate(function () { var g = BT.App.game, b = g.balls[0]; return { cam: g.cam, sy: b.y - g.cam }; });
+    ok(cam.sy > 44 && cam.sy < 640, 'Skyscraper: the ball is on screen with the view at ' + cam.cam.toFixed(0) + ' (ball at screen y ' + cam.sy.toFixed(0) + ')');
+    await page.screenshot({ path: path.join(OUT, 'skyscraper-' + hi + '.png') });
+  }
+  await stopKeep();
+
+  // ---- a screenshot of each new level a few seconds in (and its opening)
+  await page.evaluate(function () { BT.Save.data.seen = {}; });
+  ok(true, 'act-two checks done');
+}
 
 // ------------------------------------------------------------------ Endless in a real browser
 async function endlessChecks(browser) {
@@ -382,7 +549,7 @@ async function endlessChecks(browser) {
   ok(await page.evaluate(function () { return BT.Save.endlessBest('hard').round === 0; }), 'bests are kept per difficulty');
 
   // deeper rounds with every world finished: screenshots at a few depths, and a render sweep for errors
-  await page.evaluate(function () { for (var i = 1; i <= 40; i++) BT.Save.record(i, 2, 500); BT.App.startEndless(); });
+  await page.evaluate(function () { for (var i = 1; i <= 55; i++) BT.Save.record(i, 2, 500); BT.App.startEndless(); });
   var depths = [3, 9, 16, 24];
   for (var di = 0; di < depths.length; di++) {
     await page.evaluate(function (rd) { var a = BT.App; a.run.round = rd; a.run.seed = 4242 + rd; a.startRound(); a.doAction('dismissRound'); a.game.tap(); }, depths[di]);
@@ -405,7 +572,7 @@ async function endlessChecks(browser) {
     }
     return { n: n, twists: Object.keys(seen).length };
   });
-  ok(sweep.n === 180 && sweep.twists >= 22, 'drew ' + sweep.n + ' generated rounds covering ' + sweep.twists + ' twists without an error');
+  ok(sweep.n === 180 && sweep.twists >= 28, 'drew ' + sweep.n + ' generated rounds covering ' + sweep.twists + ' twists without an error');
   await page.evaluate(function () { clearInterval(window.__ebot); });
   ok(errors.length === 0, 'Endless: no console errors or warnings' + (errors.length ? ': ' + errors.slice(0, 5).join(' | ') : ''));
   await ctx.close();

@@ -321,11 +321,11 @@
       this.card(ctx, 86, 468);
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillStyle = '#ffd35a'; ctx.font = 'bold 13px ' + R.FONT;
-      ctx.fillText('THE MACHINE IS BEATEN', C.W / 2, 116);
+      ctx.fillText(app.level.name.toUpperCase() + ' IS BEATEN', C.W / 2, 116);
       ctx.fillStyle = '#ffffff'; ctx.font = '900 30px ' + R.FONT;
       ctx.fillText('You did it!', C.W / 2, 150);
       ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.font = '15px ' + R.FONT;
-      R.wrapText(ctx, 'All eight worlds and all ' + BT.LEVELS.length + ' levels of Brick Twist are cleared.', C.W / 2, 184, C.W - 90, 20);
+      R.wrapText(ctx, 'All ' + countWord(BT.WORLDS.length) + ' worlds and all ' + BT.LEVELS.length + ' levels of Brick Twist are cleared.', C.W / 2, 184, C.W - 90, 20);
       // this fight's stars
       for (i = 0; i < 3; i++) {
         var appear = Math.max(0, Math.min(1, (t - 0.4 - i * 0.3) / 0.25)), got = i < res.stars;
@@ -351,6 +351,51 @@
         : 'Every level has 3 stars. That is perfect!', C.W / 2, 382, C.W - 96, 19);
       this.button(ctx, 60, 446, C.W - 120, 48, 'Back to levels', 'levels', true);
       this.button(ctx, 60, 502, C.W - 120, 40, 'Fight it again', 'restart');
+    },
+
+    // ---------------- act one complete (after the level marked actEnd) ----------------
+    // Stars so far (in the levels up to here), the new worlds that just opened, and the way on.
+    drawActOne: function (ctx, app, t) {
+      var R = BT.Render.R, S = BT.Save, res = app.game.result, L = app.level, i;
+      this.dim(ctx, 0.68);
+      this.card(ctx, 70, 500);
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#ffd35a'; ctx.font = 'bold 13px ' + R.FONT;
+      ctx.fillText(L.name.toUpperCase() + ' IS BEATEN', C.W / 2, 98);
+      ctx.fillStyle = '#ffffff'; ctx.font = '900 28px ' + R.FONT;
+      ctx.fillText('Act one complete!', C.W / 2, 130);
+      for (i = 0; i < 3; i++) {
+        var appear = Math.max(0, Math.min(1, (t - 0.35 - i * 0.3) / 0.25)), got = i < res.stars;
+        var s2 = got ? (appear < 1 ? 0.4 + appear * 0.9 : 1 + 0.06 * Math.sin(t * 3 + i)) : 1;
+        if (got && appear <= 0) R.drawStar(ctx, C.W / 2 - 46 + i * 46, 172, 16, false);
+        else R.drawStar(ctx, C.W / 2 - 46 + i * 46, 172, 16 * s2, got);
+        if (got && appear > 0 && appear < 1 && !app.starSfx[i]) { app.starSfx[i] = true; BT.Audio.play('break', 4 + i * 4); }
+      }
+      // stars in act one (the levels up to and including this one)
+      var tot = 0, n = 0;
+      for (i = 0; i < BT.LEVELS.length && BT.LEVELS[i].id <= L.id; i++) { tot += S.levelInfo(BT.LEVELS[i].id).stars; n++; }
+      R.roundRect(ctx, 48, 196, C.W - 96, 40, 12); ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fill();
+      R.drawStar(ctx, C.W / 2 - 66, 216, 10, true);
+      ctx.textAlign = 'left'; ctx.fillStyle = '#ffffff'; ctx.font = 'bold 17px ' + R.FONT;
+      ctx.fillText(tot + ' / ' + n * 3 + ' stars so far', C.W / 2 - 50, 217);
+      // the worlds that just opened
+      var newW = BT.WORLDS.filter(function (W) { return W.n > L.world; }).slice(0, 3);
+      ctx.textAlign = 'center'; ctx.fillStyle = '#9dffb0'; ctx.font = 'bold 15px ' + R.FONT;
+      ctx.fillText(newW.length === 3 ? 'Three new worlds unlocked!' : (newW.length ? 'New worlds unlocked!' : 'More worlds are coming!'), C.W / 2, 262);
+      for (i = 0; i < newW.length; i++) {
+        var W = newW[i], y = 286 + i * 42, a = Math.max(0, Math.min(1, (t - 0.9 - i * 0.2) / 0.3));
+        ctx.globalAlpha = a;
+        R.roundRect(ctx, 52, y, C.W - 104, 34, 10); ctx.fillStyle = 'rgba(255,255,255,0.07)'; ctx.fill();
+        ctx.strokeStyle = W.accent; ctx.lineWidth = 1.5; ctx.stroke();
+        ctx.textAlign = 'left'; ctx.fillStyle = W.accent; ctx.font = 'bold 12px ' + R.FONT; ctx.fillText('WORLD ' + W.n, 66, y + 17);
+        ctx.fillStyle = '#ffffff'; ctx.font = '14px ' + R.FONT; ctx.fillText(W.name, 140, y + 17.5);
+        ctx.globalAlpha = 1;
+      }
+      ctx.textAlign = 'center';
+      var nx = BT.levelById(L.id + 1);
+      if (nx) this.button(ctx, 60, 422, C.W - 120, 48, 'On to World ' + nx.world, 'next', true);
+      this.button(ctx, 60, 480, (C.W - 132) / 2, 44, 'Replay', 'restart');
+      this.button(ctx, 72 + (C.W - 132) / 2, 480, (C.W - 132) / 2, 44, 'Levels', 'levels');
     },
 
     // ---------------- Endless: the card between rounds, and the end of a run ----------------
@@ -437,6 +482,10 @@
       this.button(ctx, 60, 364, C.W - 120, 46, 'Levels', 'levels');
     }
   };
+
+  var WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
+  function countWord(n) { return WORDS[n] || String(n); }
+  UI.countWord = countWord;
 
   function fmt(s) {
     s = Math.round(s);

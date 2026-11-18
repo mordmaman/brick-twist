@@ -1,6 +1,10 @@
 # Brick Twist
 
-A brick-breaker where every level changes a rule. Levels 1-40 (Worlds 1-8), then Endless.
+A brick-breaker where every level changes a rule. Levels 1-55 in Worlds 1-11, then Endless.
+
+- Act one, levels 1-40 (Worlds 1-8), ends with The Machine.
+- Act two, levels 41-55 (Worlds 9-11): New powers (Power Shot, Slow-Mo, Curveball, Safety Wall: used by tapping
+  while the ball is in play), Living bricks, and Topsy-turvy, ending with the final boss, The Architect.
 
 - Play: open `index.html` (or the GitHub Pages site). It installs as an app and works offline after the first visit.
 - Edit: source is in `src/`, tunables are in the `CONFIG` object at the top of `src/config.js`.
@@ -15,7 +19,8 @@ Reached from the bar under the level list. It opens once World 1 is finished, an
 twists (three from round 8) taken only from worlds finished on this device. Rounds are built from a seed in
 `src/endless.js`, which also decides which twists may share a round. Lives carry over, with an extra life every
 few rounds; best round and best score are kept per difficulty. `CONFIG.endless.unlockAll` opens everything for
-testing.
+testing. Act-two twists join the pool as their worlds are finished (Puppet Strings, Builder Bots, Skyscraper and
+By the Numbers stay out: they need hand-made layouts; see `EXCLUDED` in `src/endless.js`).
 
 ## Installable app (PWA)
 

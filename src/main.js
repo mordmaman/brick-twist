@@ -9,7 +9,7 @@
     canvas: null, ctx: null,
     view: { scale: 1, ox: 0, oy: 0, dpr: 1, cw: 0, ch: 0 },
     scene: 'select',      // select | play
-    overlay: null,        // null | banner | pause | won | lost | ending | round | over (the last two: Endless)
+    overlay: null,        // null | banner | pause | won | lost | actone | ending | round | over (the last two: Endless)
     mode: 'campaign',     // campaign | endless
     run: null,            // the Endless run: { seed, round, lives, score, preset, worlds, startBest, ... }
     lockMsgT: 0,          // a tap on the locked Endless bar shows a hint for a moment
@@ -144,7 +144,7 @@
         return;
       }
       var from = this.level ? this.level.id : this.furthestUnlocked();
-      if (this.overlay === 'won' || this.overlay === 'ending') from = Math.min(BT.LEVELS.length, from + 1);
+      if (this.overlay === 'won' || this.overlay === 'ending' || this.overlay === 'actone') from = Math.min(BT.LEVELS.length, from + 1);
       this.scene = 'select'; this.overlay = null; this.game = null;
       this.sel.vel = 0; this.sel.press = null;
       this.sel.scroll = BT.UI.scrollFor(from, this.sel.scroll);
@@ -221,6 +221,7 @@
         if (this.overlay === 'pause') return this.doAction('resume');
         if (this.overlay === 'won' && a === 'enter') return this.doAction(BT.levelById(this.level.id + 1) ? 'next' : 'levels');
         if (this.overlay === 'ending' && a === 'enter') return this.doAction('levels');
+        if (this.overlay === 'actone' && a === 'enter') return this.doAction('next');
         if (this.overlay === 'lost' && a === 'enter') return this.doAction('restart');
         var g = this.activeGame();
         if (g) g.tap();
@@ -292,7 +293,8 @@
               BT.Save.record(this.level.id, g.result.stars, g.result.score);
               this.starSfx = [false, false, false];
             }
-            this.overlay = g.state === 'won' && this.level.final ? 'ending' : g.state;
+            // the end of act one gets its own card; the full ending comes after the final level
+            this.overlay = g.state === 'won' && this.level.final ? 'ending' : (g.state === 'won' && this.level.actEnd ? 'actone' : g.state);
             this.overlayT = 0; this.canvas.style.cursor = 'default';
           }
         }
@@ -330,6 +332,7 @@
         else if (this.overlay === 'pause') BT.UI.drawPause(ctx, this);
         else if (this.overlay === 'won') BT.UI.drawWon(ctx, this, this.overlayT);
         else if (this.overlay === 'ending') BT.UI.drawEnding(ctx, this, this.overlayT);
+        else if (this.overlay === 'actone') BT.UI.drawActOne(ctx, this, this.overlayT);
         else if (this.overlay === 'lost') BT.UI.drawLost(ctx, this);
         else if (this.overlay === 'round') BT.UI.drawRoundCard(ctx, this, this.overlayT);
         else if (this.overlay === 'over') BT.UI.drawEndlessOver(ctx, this, this.overlayT);

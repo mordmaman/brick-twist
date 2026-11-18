@@ -7,7 +7,7 @@ var path = require('path');
 var vm = require('vm');
 
 var SRC = path.join(__dirname, '..', 'src');
-['config.js', 'physics.js', 'bricks.js', 'rules.js', 'bosses.js', 'levels.js', 'endless.js', 'game.js', 'save.js'].forEach(function (f) {
+['config.js', 'physics.js', 'bricks.js', 'rules.js', 'rules2.js', 'bosses.js', 'bosses2.js', 'levels.js', 'endless.js', 'game.js', 'save.js'].forEach(function (f) {
   vm.runInThisContext(fs.readFileSync(path.join(SRC, f), 'utf8'), { filename: f });
 });
 var BT = globalThis.BT, C = BT.CONFIG;
@@ -131,15 +131,24 @@ section('Physics');
 
 // ------------------------------------------------------------------ level data
 section('Level data');
-var GRID_BREAKABLE = 'roygcbpmw23TKCLGRBVOI';
+var GRID_BREAKABLE = 'roygcbpmw23TKCLGRBVOIFEYNUD';
 (function () {
-  ok(BT.LEVELS.length === 40, '40 levels (the whole campaign)');
-  ok(BT.WORLDS.length === 8 && BT.WORLDS.every(function (W) { return !W.soon; }), 'eight worlds, none left as coming soon');
+  ok(BT.LEVELS.length === 55, '55 levels (acts one and two)');
+  ok(BT.WORLDS.length === 11 && BT.WORLDS.every(function (W) { return !W.soon; }), 'eleven worlds, none left as coming soon');
   BT.WORLDS.forEach(function (W) {
     var ls = BT.LEVELS.filter(function (L) { return L.world === W.n; });
     ok(ls.length === 5 && ls[4].boss && ls.slice(0, 4).every(function (L) { return !L.boss; }), 'world ' + W.n + ' has four levels and a boss');
   });
-  ok(BT.LEVELS.filter(function (L) { return L.final; }).length === 1 && BT.levelById(40).final, 'level 40 is the final boss');
+  ok(BT.LEVELS.filter(function (L) { return L.final; }).length === 1 && BT.levelById(55).final, 'level 55 is the final boss (the full ending)');
+  ok(BT.LEVELS.filter(function (L) { return L.actEnd; }).length === 1 && BT.levelById(40).actEnd && !BT.levelById(40).final, 'level 40 ends act one (its own card, not the ending)');
+  // act two: every level that grants a power leaves out the capsules that also use a tap; banners name the twist
+  BT.LEVELS.filter(function (L) { return L.world >= 9; }).forEach(function (L) {
+    var powers = (L.rules || []).filter(function (r) { return BT.Rules.registry[r.id].power; });
+    if (powers.length) ok(L.noCapsules && L.noCapsules.indexOf('laser') >= 0 && L.noCapsules.indexOf('catch') >= 0, 'level ' + L.id + ': no Laser or Catch capsules where a tap is a power');
+    var g = new BT.Game(L, 'normal', { seed: 1 }), under = 0;
+    g.bricks.forEach(function (b) { if (b.alive && b.y < g.topY) under++; });
+    ok(under === 0, 'level ' + L.id + ': nothing starts above the top wall (under the power strip)');
+  });
   BT.LEVELS.forEach(function (L, idx) {
     ok(L.id === idx + 1, 'level ids in order (' + L.id + ')');
     ok(!!L.banner && !!L.name && !!L.twist, 'level ' + L.id + ' has name, twist and banner');
@@ -210,13 +219,16 @@ function reachable(L) {
 
 // ------------------------------------------------------------------ bot playthrough
 // clumsy: a rough stand-in for a young child - slow paddle, late reactions, poor aim.
+// Act two: the bot uses the powers the way a player would (see Bot.prototype.powers), aims at what a rule says
+// matters where one does (botTarget: the next number, the gate it needs), and thinks in screen terms when Flip has
+// turned the field over. On levels 1-40 none of that applies and it plays exactly as before.
 function Bot(g, rng, clumsy) {
   this.g = g; this.rng = rng; this.offset = 0; this.lastDir = 0; this.wait = 0.4; this.fire = 0;
   this.clumsy = !!clumsy; this.finger = g.paddle.x; this.think = 0; this.goal = g.paddle.x; this.err = 0;
+  this.pw = { tapped: null, slowT: 0, sweep: 0, aimT: 0 };
 }
 Bot.prototype.act = function (dt) {
   var g = this.g, p = g.paddle, i, best = null, bestT = 1e9, bestTop = false;
-  // a mirrored top paddle that copies ours (Double Trouble) has to be steered under balls going up too
   var top = null;
   for (i = 0; i < g.xpaddles.length; i++) if (g.xpaddles[i].counts && g.xpaddles[i].face > 0) top = g.xpaddles[i];
   for (i = 0; i < g.balls.length; i++) {
@@ -237,9 +249,8 @@ Bot.prototype.act = function (dt) {
     if (g.wrapX) lx = g.wrapPos(best.x + best.vx * (ty - best.y) / best.vy);
     else if (bestTop) lx = BT.Physics.predictLandingX(best.x, -best.y, best.vx, -best.vy, -ty, g.wallL + best.r, g.wallR - best.r);
     else lx = BT.Physics.predictLandingX(best.x, best.y, best.vx, best.vy, ty, g.wallL + best.r, g.wallR - best.r);
-    // pick a new aim offset each time a fresh ball approach starts
     var dir = bestTop ? 2 : 1;
-    if (this.lastDir !== dir) this.offset = (this.rng() * 2 - 1) * w * (bestTop ? 0.3 : 0.38);
+    if (this.lastDir !== dir) this.offset = this.aimOffset(lx, w, bestTop);
     target = lx - this.offset + (this.rng() - 0.5) * 4;
     this.lastDir = dir;
   } else {
@@ -248,33 +259,114 @@ Bot.prototype.act = function (dt) {
   }
   if (this.clumsy) {
     this.think -= dt;
-    if (this.think <= 0) { // re-plan only every ~0.3s, sometimes badly
+    if (this.think <= 0) {
       this.think = 0.25 + this.rng() * 0.15;
       if (this.lastDir > 0 && this.rng() < 0.5) this.err = (this.rng() * 2 - 1) * p.w * 0.35;
       this.goal = target + this.err;
     }
-    var maxMove = 420 * dt; // a slow, careful thumb
+    var maxMove = 420 * dt;
     var togo = g.wrapX ? g.wrapDelta(this.goal - this.finger) : this.goal - this.finger;
     this.finger += Math.max(-maxMove, Math.min(maxMove, togo));
     target = this.finger;
   }
+  if (g.powers && g.powers.length) target = this.powers(dt, target);
   if (g.eff.flip > 0) target = C.W - target;
+  if (g.viewFlip) target = C.W - target; // it thinks in field terms; the screen is upside down
   g.pointTo(target);
   if (g.eff.laser > 0) { this.fire -= dt; if (this.fire <= 0) { g.tap(); this.fire = 0.3; } }
 };
-
+// Where on the paddle to take the ball. Normally a random spot; where a rule names a target (By the Numbers),
+// most of the time the spot that sends the ball at it.
+Bot.prototype.aimOffset = function (lx, w, top) {
+  var g = this.g, tg = null, careful = this.pw && this.pw.careful;
+  for (var i = 0; i < g.rules.length && !tg; i++) if (g.rules[i].mod.botTarget) tg = g.rules[i].mod.botTarget(g, g.rules[i]);
+  if (!tg && careful) { // in slow motion: aim at the nearest wanted brick it can see (nothing in the way)
+    var bd = 1e9;
+    for (i = 0; i < g.bricks.length; i++) {
+      var k = g.bricks[i];
+      if (!k.alive || !k.required || !k.solid) continue;
+      var d = Math.abs(k.x + k.w / 2 - lx) + (g.paddle.y - k.y) * 0.2;
+      if (d < bd && this.clearLine(lx, g.paddle.y - 14, k)) { bd = d; tg = { x: k.x + k.w / 2, y: k.y + k.h / 2 }; }
+    }
+  }
+  if (careful) this.pw.careful = false;
+  if (tg && (careful || this.rng() < 0.75) && !this.clumsy) {
+    var py = g.paddle.y, a = Math.atan2(tg.x - lx, py - tg.y) / BT.Physics.DEG;
+    var f = Math.max(-0.95, Math.min(0.95, a / C.ball.maxAngleDeg));
+    return f * w / 2 + (this.rng() - 0.5) * 6;
+  }
+  return (this.rng() * 2 - 1) * w * (top ? 0.3 : 0.38);
+};
+Bot.prototype.clearLine = function (x0, y0, k) {
+  var g = this.g, x1 = k.x + k.w / 2, y1 = k.y + k.h / 2, n = Math.ceil(Math.hypot(x1 - x0, y1 - y0) / 5);
+  for (var s = 1; s < n; s++) {
+    var x = x0 + (x1 - x0) * s / n, y = y0 + (y1 - y0) * s / n;
+    for (var j = 0; j < g.bricks.length; j++) { var o = g.bricks[j]; if (o !== k && o.alive && o.solid && x > o.x - 6 && x < o.x + o.w + 6 && y > o.y - 6 && y < o.y + o.h + 6) return false; }
+  }
+  return true;
+};
+// Powers, used the way a player would: Power Shot when the ring is bright, Slow-Mo when a ball is about to be
+// missed, Safety Wall likewise, Curveball by sweeping the paddle while the ball climbs, towards what it wants to hit.
+Bot.prototype.powers = function (dt, target) {
+  var g = this.g, p = g.paddle, st = this.pw, i;
+  var nx = BT.Rules2.nextToPaddle(g), nb = nx.b, nt = nb ? nx.t : 99, lx = nx.x;
+  var reach = p.w / 2 + (this.clumsy ? 2 : 6) + (this.clumsy ? 0 : 900 * nt);
+  var miss = nb && Math.abs(lx - (this.clumsy ? this.finger : target)) > p.w / 2 - 2 && nt < (this.clumsy ? 0.5 : 0.35);
+  var ps = g.powerOf('powershot'), sm = g.powerOf('slowmo'), sw = g.powerOf('safetywall'), cv = g.powerOf('curve');
+  if (ps && ps.s.charge >= 1 && nb && nt <= ps.s.window * (this.clumsy ? 0.9 : 0.6) && st.tapped !== nb) {
+    if (!this.clumsy || this.rng() < 0.08) { st.tapped = nb; g.tap(); }
+  }
+  if (nb && nt > 0.8) st.tapped = null;
+  if (sm) {
+    if (!sm.s.on && miss && sm.s.meter >= sm.p.minStart) g.tap();
+    else if (!sm.s.on && !this.clumsy && nb && nt > 0.38 && nt < 0.6 && sm.s.meter >= 0.95) { g.tap(); this.lastDir = 0; st.careful = true; } // time to line up an aimed shot
+    else if (sm.s.on && (!nb || nt > 1.4) && !(ps && ps.s.charge >= 1 && nb && nt <= ps.s.window)) { st.slowT += dt; if (st.slowT > 0.4) { g.tap(); st.slowT = 0; } }
+    else st.slowT = 0;
+  }
+  if (sw && sw.s.up <= 0 && sw.s.charges > 0) {
+    for (i = 0; i < g.balls.length; i++) {
+      var b = g.balls[i];
+      if (b.stuck || b.vy <= 0 || b.y < 560) continue;
+      var mx = this.clumsy ? this.finger : p.x;
+      if (Math.abs(b.x - mx) > p.w / 2 + 4) { g.tap(); break; }
+    }
+  }
+  if (cv && !this.clumsy) target = this.curve(cv, target);
+  return target;
+};
+Bot.prototype.curve = function (cv, target) {
+  var g = this.g, p = g.paddle, b = null, i;
+  for (i = 0; i < g.balls.length; i++) if (!g.balls[i].stuck && g.balls[i].vy < 0 && g.balls[i].spin > 0.05 && g.balls[i].y < cv.p.lowY) { b = g.balls[i]; break; }
+  if (!b) return target;
+  // something better than straight on: the boss's hint, else the nearest wanted brick above the ball
+  var want = null;
+  for (i = 0; i < g.rules.length && !want; i++) if (g.rules[i].mod.botCurve) want = g.rules[i].mod.botCurve(g, g.rules[i], b);
+  if (!want) {
+    var bd = 1e9;
+    for (i = 0; i < g.bricks.length; i++) {
+      var k = g.bricks[i];
+      if (!k.alive || !k.required || !k.solid || k.y > b.y - 20) continue;
+      var d = Math.abs(k.x + k.w / 2 - b.x) + (b.y - k.y) * 0.3;
+      if (d < bd) { bd = d; want = { x: k.x + k.w / 2, y: k.y + k.h / 2 }; }
+    }
+  }
+  if (!want) return target;
+  var tt = (b.y - want.y) / -b.vy, px = BT.Physics.predictLandingX(b.x, -b.y, b.vx, -b.vy, -want.y, g.wallL + b.r, g.wallR - b.r);
+  if (Math.abs(px - want.x) < 18 || tt <= 0) return target;
+  var dir = px < want.x ? 1 : -1;
+  return p.x + dir * 4; // sweep the paddle that way (about 480 px/s, a steady thumb)
+};
 function checkBalls(g, report) {
-  // intended exits: the bottom; the top when g.topOpen (Double Trouble); the side edges wrap when g.wrapX
   var minX = g.wrapX ? 0 : null, maxX = g.wrapX ? C.W : null;
   for (var i = 0; i < g.balls.length; i++) {
     var b = g.balls[i];
     if (b.stuck) continue;
     var sp = Math.hypot(b.vx, b.vy);
     if (sp > C.ball.absMaxSpeed + 1e-6) report.speed++;
-    var lo = minX === null ? g.wallL + b.r : minX, hi = maxX === null ? g.wallR - b.r : maxX; // walls may have moved in
-    var top = g.topOpen ? C.TOP - b.r : C.TOP + b.r;
+    var lo = minX === null ? g.wallL + b.r : minX, hi = maxX === null ? g.wallR - b.r : maxX;
+    var top = g.topOpen ? g.topY - b.r : g.topY + b.r;
     if (b.x < lo - 0.01 || b.x > hi + 0.01 || b.y < top - 0.01 || !(b.x === b.x) || !(b.y === b.y)) report.outside++;
-    if (report.inside != null) { // phase-2 and later levels: a ball is never left inside a solid brick
+    if (report.inside != null) {
       for (var j = 0; j < g.bricks.length; j++) {
         var k = g.bricks[j];
         if (k.alive && k.solid && BT.Physics.circleRect(b.x, b.y, b.r, k.x, k.y, k.w, k.h) > 2.5) { report.inside++; break; }
@@ -282,7 +374,6 @@ function checkBalls(g, report) {
     }
   }
 }
-
 function playLevel(L, preset, seed, limitSec, clumsy) {
   var rng = BT.mulberry32(seed * 7919 + 13);
   var total = 0, gameOvers = 0, steps = Math.round(limitSec / DT);
@@ -299,12 +390,24 @@ function playLevel(L, preset, seed, limitSec, clumsy) {
       if (g.state === 'won') {
         if (g.boss && g.boss.id === 'rival') report.rival = { hits: g.boss.s.hits, misses: g.boss.s.misses };
         report.attempts = g.attempts;
+        report.powers = powerUse(g);
         return { won: true, time: total * DT, gameOvers: gameOvers, report: report, stars: g.result.stars, lives: g.livesLost };
       }
       if (g.state === 'lost') { gameOvers++; break; }
     }
   }
   return { won: false, time: total * DT, gameOvers: gameOvers, report: report };
+}
+// how much the bot used each power in its winning game (shown with the times)
+function powerUse(g) {
+  var out = [];
+  g.powers.forEach(function (r) {
+    if (r.id === 'powershot') out.push('shots ' + r.s.shots);
+    if (r.id === 'slowmo') out.push('slow-mos ' + r.s.uses);
+    if (r.id === 'curve') out.push('curve ' + r.s.used.toFixed(1) + 's');
+    if (r.id === 'safetywall') out.push('walls ' + r.s.uses + ' saved ' + r.s.saves);
+  });
+  return out.join(', ');
 }
 
 if (ENDLESS_ONLY) { endlessSection(); return finish(); }
@@ -314,11 +417,14 @@ var LIMIT = 600; // game seconds per level, across retries
 var seeds = QUICK ? [1] : [1, 2, 3];
 var t0 = Date.now();
 var RIVAL = { hits: 0, misses: 0 };
+var ACT2_TIMES = {};
 BT.LEVELS.forEach(function (L) {
   var times = [], go = 0, rep = { speed: 0, outside: 0, inside: 0 }, wins = 0, stars = [], extra = '';
-  seeds.forEach(function (sd) {
+  var sds = L.world >= 9 ? (QUICK ? [1, 2] : [1, 2, 3, 4, 5, 6]) : seeds; // act two: more seeds
+  sds.forEach(function (sd) {
     var r = playLevel(L, 'normal', sd, LIMIT);
     if (r.won) { wins++; times.push(r.time); stars.push(r.stars); }
+    if (r.won && r.report.powers && sd === 1) extra += '  (' + r.report.powers + ')';
     go += r.gameOvers; rep.speed += r.report.speed; rep.outside += r.report.outside; rep.inside += r.report.inside || 0;
     if (r.report.rival) {
       var h = r.report.rival.hits, m = r.report.rival.misses;
@@ -329,10 +435,11 @@ BT.LEVELS.forEach(function (L) {
   });
   times.sort(function (a, b) { return a - b; });
   var med = times.length ? times[(times.length - 1) >> 1] : NaN;
-  console.log('  L' + (L.id < 10 ? ' ' : '') + L.id + ' ' + pad(L.name, 15) + ' cleared ' + wins + '/' + seeds.length +
+  if (L.world >= 9) ACT2_TIMES[L.id] = times.slice();
+  console.log('  L' + (L.id < 10 ? ' ' : '') + L.id + ' ' + pad(L.name, 15) + ' cleared ' + wins + '/' + sds.length +
     '  median ' + (med === med ? med.toFixed(0) + 's' : '-') + '  game-overs ' + go + '  stars ' + stars.join(',') + '  par ' + L.par +
     (L.id > 15 ? '  times ' + times.map(function (x) { return x.toFixed(0) + 's'; }).join(' ') : '') + extra);
-  ok(wins === seeds.length, 'bot clears level ' + L.id + ' within ' + LIMIT + 's');
+  ok(wins === sds.length, 'bot clears level ' + L.id + ' within ' + LIMIT + 's');
   if (L.id > 15) ok(rep.inside === 0, 'level ' + L.id + ' ball never left inside a solid brick (' + rep.inside + ')');
   ok(rep.speed === 0, 'level ' + L.id + ' ball never exceeds max speed (' + rep.speed + ')');
   ok(rep.outside === 0, 'level ' + L.id + ' ball never leaves the playfield (' + rep.outside + ')');
@@ -354,13 +461,13 @@ BT.LEVELS.filter(function (L) { return L.world === 1 || L.world === 4; }).forEac
   ok(won === 3, 'clumsy bot clears level ' + L.id + ' on Easy');
 });
 section('Bot on Easy, Worlds 6 to 8');
-BT.LEVELS.filter(function (L) { return L.world >= 6; }).forEach(function (L) {
+BT.LEVELS.filter(function (L) { return L.world >= 6 && L.world <= 8; }).forEach(function (L) {
   var r = playLevel(L, 'easy', 5, LIMIT);
   console.log('  L' + L.id + ' ' + pad(L.name, 16) + (r.won ? ' cleared in ' + r.time.toFixed(0) + 's, lives lost ' + r.lives + ', game-overs ' + r.gameOvers : ' NOT cleared'));
   ok(r.won, 'bot clears level ' + L.id + ' on Easy');
 });
 section('Clumsy bot on Easy, Worlds 6 to 8 (a younger player, with persistence: game-overs allowed)');
-BT.LEVELS.filter(function (L) { return L.world >= 6; }).forEach(function (L) {
+BT.LEVELS.filter(function (L) { return L.world >= 6 && L.world <= 8; }).forEach(function (L) {
   var res = [1, 2, 3].map(function (sd) { return playLevel(L, 'easy', sd, LIMIT, true); });
   var won = res.filter(function (r) { return r.won; }).length;
   var go = res.reduce(function (a, r) { return a + r.gameOvers; }, 0);
@@ -368,9 +475,42 @@ BT.LEVELS.filter(function (L) { return L.world >= 6; }).forEach(function (L) {
   ok(won === 3, 'clumsy bot clears level ' + L.id + ' on Easy');
 });
 section('Bot on Hard, Worlds 7 and 8 (information only)');
-BT.LEVELS.filter(function (L) { return L.world >= 7; }).forEach(function (L) {
+BT.LEVELS.filter(function (L) { return L.world >= 7 && L.world <= 8; }).forEach(function (L) {
   var r = playLevel(L, 'hard', 2, LIMIT);
   console.log('  L' + L.id + ' ' + pad(L.name, 16) + (r.won ? ' cleared in ' + r.time.toFixed(0) + 's, game-overs ' + r.gameOvers : ' not cleared') + ', lives lost ' + (r.lives == null ? '-' : r.lives));
+});
+
+// ---- act two (Worlds 9-11)
+section('Bot on Easy, Worlds 9 to 11');
+BT.LEVELS.filter(function (L) { return L.world >= 9; }).forEach(function (L) {
+  var r = playLevel(L, 'easy', 5, LIMIT);
+  console.log('  L' + L.id + ' ' + pad(L.name, 16) + (r.won ? ' cleared in ' + r.time.toFixed(0) + 's, lives lost ' + r.lives + ', game-overs ' + r.gameOvers : ' NOT cleared'));
+  ok(r.won, 'bot clears level ' + L.id + ' on Easy');
+  ok(r.report.speed === 0 && r.report.outside === 0 && r.report.inside === 0, 'level ' + L.id + ' on Easy: ball legal ' + JSON.stringify(r.report));
+});
+section('Clumsy bot on Easy, Worlds 9 to 11 (a younger player, with persistence: game-overs allowed)');
+BT.LEVELS.filter(function (L) { return L.world >= 9; }).forEach(function (L) {
+  var res = [1, 2, 3].map(function (sd) { return playLevel(L, 'easy', sd, LIMIT, true); });
+  var won = res.filter(function (r) { return r.won; }).length;
+  var go = res.reduce(function (a, r) { return a + r.gameOvers; }, 0);
+  console.log('  L' + L.id + ' ' + pad(L.name, 16) + ' cleared ' + won + '/3, game-overs ' + go + ', times ' + res.map(function (r) { return r.time.toFixed(0) + 's'; }).join(' '));
+  ok(won === 3, 'clumsy bot clears level ' + L.id + ' on Easy');
+});
+section('Bot on Hard, Worlds 9 to 11 (information only)');
+BT.LEVELS.filter(function (L) { return L.world >= 9; }).forEach(function (L) {
+  var res = [2, 3].map(function (sd) { return playLevel(L, 'hard', sd, LIMIT); });
+  console.log('  L' + L.id + ' ' + pad(L.name, 16) + res.map(function (r) { return r.won ? ' cleared in ' + r.time.toFixed(0) + 's (lives lost ' + r.lives + ', game-overs ' + r.gameOvers + ')' : ' not cleared'; }).join(','));
+});
+section('The bosses with and without powers (Normal; information: the powers are how you win)');
+[45, 55].forEach(function (id) {
+  var L = BT.levelById(id), withP = [], without = [];
+  [1, 2, 3].forEach(function (sd) {
+    withP.push(playLevel(L, 'normal', sd, LIMIT));
+    var bare = JSON.parse(JSON.stringify(L)); bare.rules = bare.rules.filter(function (r) { return !BT.Rules.registry[r.id].power; });
+    without.push(playLevel(bare, 'normal', sd, LIMIT));
+  });
+  function sum(list) { return list.map(function (r) { return r.won ? r.time.toFixed(0) + 's' : 'not cleared'; }).join(' '); }
+  console.log('  L' + id + ' ' + pad(L.name, 16) + ' with powers: ' + sum(withP) + '   without: ' + sum(without));
 });
 
 section('Clumsy bot on Normal (information only)');
@@ -969,10 +1109,424 @@ section('Phase 3 rules compose');
     try { for (var s2 = 0; s2 < 120 * 60 && gc.state !== 'won' && gc.state !== 'lost'; s2++) { bc.act(DT); gc.step(DT); checkBalls(gc, rc); } } catch (e) { threw = e; }
     ok(!threw && rc.speed === 0 && rc.outside === 0 && rc.inside === 0, 'phase-3 combo ' + (ci + 1) + ' (' + cb.rules.map(function (q) { return q.id; }).join('+') + ') runs legally' + (threw ? ': ' + threw.message : '') + ' ' + JSON.stringify(rc));
   });
+  // act-two rules mixed with each other and with older ones (Endless and the bosses combine them)
+  var combos2 = [
+    { grid: ['.EE....EE...', 'rrFrrrrFrrrr', '....##......'], rules: [{ id: 'hatch', first: 2 }, { id: 'cannon' }, { id: 'safetywall' }, { id: 'conveyor', rows: { 1: 30 } }] },
+    { grid: ['..RRYYBB....', '.ww....ww...', '............', '..pppp......'], rules: [{ id: 'paint', gates: [{ x: 20, y: 360, w: 70, color: 'red' }, { x: 145, y: 390, w: 70, color: 'yellow' }, { x: 270, y: 360, w: 70, color: 'blue' }] }, { id: 'puppet', rows: [3] }, { id: 'powershot' }, { id: 'curve' }] },
+    { grid: ['oooooooooooo', '.UU....DD...', '............'], rules: [{ id: 'flip', first: 2, every: 6 }, { id: 'slowmo' }, { id: 'wrap' }, { id: 'redhot' }] },
+    { grid: ['.yyyyyyyyyy.', '.gggggggggg.'], rules: [{ id: 'builders', bots: [{ row: 4, c0: 0, c1: 11, rows: [0, 1] }] }, { id: 'tide' }, { id: 'pinball', bumpers: [{ x: 180, y: 300 }], gates: [] }] },
+    { grid: ['N.N.N.N.N...', '............', '#..........#'], rules: [{ id: 'numbers' }, { id: 'cannon' }, { id: 'powershot' }, { id: 'slowmo' }, { id: 'curve' }, { id: 'safetywall' }] }
+  ];
+  combos2.forEach(function (cb, ci) {
+    var gc = new BT.Game({ id: 985 + ci, grid: cb.grid, rules: cb.rules, capsuleChance: 0.3 }, 'normal', { seed: 19 + ci });
+    var bc = new Bot(gc, BT.mulberry32(191 + ci)), rc = { speed: 0, outside: 0, inside: 0 }, threw = null;
+    try { for (var s2 = 0; s2 < 120 * 60 && gc.state !== 'won' && gc.state !== 'lost'; s2++) { bc.act(DT); gc.step(DT); checkBalls(gc, rc); } } catch (e) { threw = e; }
+    ok(!threw && rc.speed === 0 && rc.outside === 0 && rc.inside === 0, 'act-two combo ' + (ci + 1) + ' (' + cb.rules.map(function (q) { return q.id; }).join('+') + ') runs legally' + (threw ? ': ' + threw.message : '') + ' ' + JSON.stringify(rc));
+  });
+
   // engine extension points stay off unless a rule switches them on
   var g0 = new BT.Game(BT.levelById(1), 'normal', { seed: 1 });
   ok(g0.wallL === 0 && g0.wallR === C.W && !g0.paddleIce && g0.deflectors.length === 0 && g0.balls[0].pierce === 0 && g0.balls[0].sizeMul === 1 && g0.balls[0].zoneMul === 1 && g0.paddle.speedCap === 0,
     'phase-3 engine extension points are all off by default');
+})();
+
+// ------------------------------------------------------------------ act two twists
+section('World 9, 10 and 11 twists');
+(function () {
+  var P = BT.Physics, i, k, g, ball, r;
+  function launched(L, preset, seed) {
+    var gg = new BT.Game(L, preset || 'normal', { seed: seed || 1 });
+    gg.tap();
+    var b = gg.balls[0]; b.stuck = false; b.serve = false;
+    return gg;
+  }
+  function park(b, x, y, vx, vy) { b.x = x; b.y = y; b.prevX = x; b.prevY = y; b.vx = vx; b.vy = vy; }
+  function ruleOf(gg, id) { for (var q = 0; q < gg.rules.length; q++) if (gg.rules[q].id === id) return gg.rules[q]; return null; }
+  function steps(gg, n, fn) { for (var q = 0; q < n; q++) { if (fn) fn(q); gg.step(DT); } }
+  function onPaddleY(gg, b) { return gg.paddle.y - gg.paddle.h / 2 - b.r; }
+
+  // ---------------- Power Shot
+  var L41 = BT.levelById(41);
+  g = launched(L41); r = ruleOf(g, 'powershot'); ball = g.balls[0];
+  park(ball, 180, 300, 0, -300); g.step(DT);
+  g.tap();
+  ok(r.s.armT <= 0 && r.s.charge === 1 && !ball.powered, 'Power Shot: a tap at the wrong moment does nothing at all (no penalty, still ready)');
+  g = launched(L41); r = ruleOf(g, 'powershot'); ball = g.balls[0];
+  park(ball, g.paddle.x, onPaddleY(g, ball) - 40, 0, 300); g.step(DT);
+  ok(r.mod.inWindow(r), 'Power Shot: the ring is bright just before the ball lands');
+  g.tap();
+  for (i = 0; i < 60 && ball.vy > 0; i++) g.step(DT);
+  ok(ball.powered && ball.pierce === C.rules.powershot.pierce && ball.boost > 1.3 && r.s.charge === 0, 'Power Shot: a tap as the ball lands sends it back powered (pierce ' + ball.pierce + ', boost ' + ball.boost.toFixed(2) + ')');
+  var maxSp = 0; for (i = 0; i < 120; i++) { g.step(DT); if (g.balls[0]) maxSp = Math.max(maxSp, Math.hypot(g.balls[0].vx, g.balls[0].vy)); }
+  ok(maxSp <= C.ball.absMaxSpeed + 1e-6, 'Power Shot: the boost is bounded (max ' + maxSp.toFixed(0) + ' px/s)');
+  g = launched(L41); r = ruleOf(g, 'powershot'); ball = g.balls[0];
+  park(ball, g.paddle.x, onPaddleY(g, ball) - 10, 0, 300);
+  for (i = 0; i < 30 && ball.vy > 0; i++) g.step(DT);
+  steps(g, Math.round(0.1 / DT));
+  g.tap();
+  ok(ball.powered, 'Power Shot: a tap just after the bounce (' + (C.rules.powershot.late * 1000) + 'ms grace) still counts');
+  ok(C.rules.powershot.windowEasy > C.rules.powershot.window && C.rules.powershot.lateEasy > C.rules.powershot.late, 'Power Shot: the timing window is wider on Easy');
+  var armL = { id: 990, grid: ['............', '....3333....', '....3333....', '....3333....', '............', '############'], rules: [{ id: 'powershot' }] };
+  g = launched(armL); r = ruleOf(g, 'powershot'); ball = g.balls[0];
+  var left0 = g.requiredLeft();
+  park(ball, 4 * 30 + 45, 150, 0, -300); r.mod.fire(g, r, ball);
+  for (i = 0; i < 120 && ball.vy < 0; i++) g.step(DT);
+  ok(left0 - g.requiredLeft() >= C.rules.powershot.pierce, 'Power Shot: a powered ball punches straight through ' + (left0 - g.requiredLeft()) + ' three-hit bricks in one go');
+  g = launched(L41); r = ruleOf(g, 'powershot'); ball = g.balls[0]; r.s.charge = 0.5;
+  park(ball, g.paddle.x, onPaddleY(g, ball) - 40, 0, 300); g.step(DT); g.tap();
+  ok(r.s.armT <= 0, 'Power Shot: while it recharges a tap is simply ignored');
+
+  // ---------------- tap precedence (launch > timed power > lasers > free power)
+  var precL = { id: 991, grid: ['rrrrrrrrrrrr'], rules: [{ id: 'powershot' }, { id: 'slowmo' }] };
+  g = new BT.Game(precL, 'normal', { seed: 1 }); var ps = ruleOf(g, 'powershot'), sm = ruleOf(g, 'slowmo');
+  g.tap();
+  ok(g.state === 'play' && !sm.s.on && ps.s.armT <= 0, 'Taps: at the serve a tap only launches');
+  ball = g.balls[0]; park(ball, g.paddle.x, onPaddleY(g, ball) - 40, 0, 300); g.step(DT); g.tap();
+  ok(ps.s.armT > 0 && !sm.s.on, 'Taps: with the ring bright a tap arms the Power Shot (not Slow-Mo)');
+  g = launched(precL); ps = ruleOf(g, 'powershot'); sm = ruleOf(g, 'slowmo'); ball = g.balls[0];
+  park(ball, 180, 300, 0, -300); g.step(DT); g.tap();
+  ok(sm.s.on && ps.s.armT <= 0, 'Taps: otherwise a tap starts Slow-Mo, and a second tap stops it');
+  g.tap(); ok(!sm.s.on, 'Taps: (stopped)');
+  g.eff.laser = 5; g.laserCd = 0; var live0 = g.lasers.filter(function (L) { return L.alive; }).length; g.tap();
+  ok(!sm.s.on && g.lasers.filter(function (L) { return L.alive; }).length > live0, 'Taps: with the Laser on, a tap fires lasers before a free power');
+  g.eff.laser = 0;
+  ball.stuck = true; ball.stuckTimer = 0; g.tap();
+  ok(!ball.stuck && !sm.s.on, 'Taps: a caught ball is released and the tap does nothing else');
+
+  // ---------------- Slow-Mo: the world slows, the paddle does not
+  var slowL = { id: 992, grid: ['r..........r'], rules: [{ id: 'slowmo' }] };
+  function paddleTime(slow) {
+    var gg = launched(slowL), q = ruleOf(gg, 'slowmo'), b = gg.balls[0];
+    park(b, 180, 300, 0, -280);
+    if (slow) { gg.tap(); steps(gg, 40, function () { park(b, 180, 300, 0, -280); }); }
+    var y0 = b.y; steps(gg, 10); var dy = y0 - b.y;
+    gg.pointTo(gg.paddle.x - 120); var n = 0;
+    while (Math.abs(gg.paddle.x - gg.paddle.targetX) > 1 && n < 200) { gg.step(DT); n++; }
+    return { dy: dy, n: n, on: q.s.on };
+  }
+  var fast = paddleTime(false), slow = paddleTime(true);
+  ok(slow.on && Math.abs(slow.dy / fast.dy - C.rules.slowmo.scale) < 0.03, 'Slow-Mo: the ball moves at ' + (slow.dy / fast.dy).toFixed(2) + ' of its speed');
+  ok(slow.n === fast.n, 'Slow-Mo: the paddle is just as quick (' + slow.n + ' vs ' + fast.n + ' steps to cross)');
+  g = launched(slowL); sm = ruleOf(g, 'slowmo'); ball = g.balls[0]; g.tap();
+  var onFor = 0; for (i = 0; i < 120 * 6 && sm.s.on; i++) { park(ball, 180, 300, 0, -280); g.step(DT); onFor += DT; }
+  ok(Math.abs(onFor - C.rules.slowmo.drain) < 0.1, 'Slow-Mo: a full meter lasts ' + onFor.toFixed(2) + 's of real time, then it stops by itself');
+  g.tap(); ok(!sm.s.on, 'Slow-Mo: an empty meter cannot be started');
+  for (i = 0; i < Math.round(C.rules.slowmo.recharge / DT) + 2; i++) { park(ball, 180, 300, 0, -280); g.step(DT); }
+  ok(sm.s.meter >= 0.999, 'Slow-Mo: it refills in ' + C.rules.slowmo.recharge + 's');
+
+  // ---------------- Curveball: gentle, bounded, never stalls
+  var curveL = { id: 993, grid: ['r..........r'], rules: [{ id: 'curve' }] };
+  g = launched(curveL); var cv = ruleOf(g, 'curve'); ball = g.balls[0];
+  park(ball, 180, 440, 0, -300); ball.spin = cv.s.budget; g.paddle.x = g.paddle.targetX = 60;
+  var minFrac = 1, spd = [], bent = 0;
+  for (i = 0; i < 120 && ball.vy < 0; i++) {
+    g.pointTo(g.paddle.x + 9); g.step(DT);
+    var sp = Math.hypot(ball.vx, ball.vy); spd.push(sp); minFrac = Math.min(minFrac, Math.abs(ball.vy) / sp);
+  }
+  ok(ball.vx > 50, 'Curveball: sweeping the paddle right bends a rising ball right (vx ' + ball.vx.toFixed(0) + ')');
+  ok(Math.max.apply(null, spd) - Math.min.apply(null, spd) < 1e-6, 'Curveball: the ball\'s speed never changes');
+  ok(minFrac >= C.ball.minVyFrac - 1e-9, 'Curveball: the minimum vertical speed still holds (' + minFrac.toFixed(3) + ')');
+  ok(cv.s.used <= cv.s.budget + DT, 'Curveball: a flight has a limited budget of bend (' + cv.s.used.toFixed(2) + 's of ' + cv.s.budget + 's)');
+  g = launched(curveL); cv = ruleOf(g, 'curve'); ball = g.balls[0]; park(ball, 180, 300, 0, 300); ball.spin = cv.s.budget;
+  for (i = 0; i < 30; i++) { g.pointTo(g.paddle.x + 9); g.step(DT); }
+  ok(Math.abs(ball.vx) < 1e-6, 'Curveball: a falling ball cannot be bent (no steering it onto the paddle)');
+  // a wiggling paddle for a long time: the ball always keeps coming back to the paddle (no hovering)
+  g = launched(curveL); ball = g.balls[0]; var lastHit = 0, longest = 0, tt = 0, ph = 0;
+  for (i = 0; i < 120 * 90; i++) {
+    var b = g.balls[0]; if (!b) break;
+    if (b.stuck) { g.tap(); lastHit = tt; continue; } // a missed ball: start timing again from the serve
+    tt += DT; ph += DT * 9;
+    if (b.vy > 0 && b.y > 380) g.pointTo(P.predictLandingX(b.x, b.y, b.vx, b.vy, g.paddle.y - 12, b.r, C.W - b.r) + Math.sin(ph) * 20);
+    else g.pointTo(180 + Math.sin(ph) * 150);
+    var vy0 = b.vy; g.step(DT);
+    if (g.balls[0] && vy0 > 0 && g.balls[0].vy < 0 && g.balls[0].y > 500) { longest = Math.max(longest, tt - lastHit); lastHit = tt; }
+  }
+  // (bound: a plain shot off the paddle's very edge, no bending at all, up and back at the starting speed)
+  var edgeTrip = 2 * (C.paddle.y - C.TOP) / (C.presets.normal.speedStart * Math.cos(C.ball.maxAngleDeg * P.DEG)) + 1;
+  ok(longest > 0 && longest < edgeTrip, 'Curveball: with the paddle wiggling non-stop the ball still comes back every ' + longest.toFixed(1) + 's at most (a plain edge shot: ' + edgeTrip.toFixed(1) + 's)');
+  g = launched(curveL); cv = ruleOf(g, 'curve'); ball = g.balls[0]; var flattest = 0;
+  park(ball, 180, 460, 0, -300); ball.spin = 5; g.paddle.x = g.paddle.targetX = 30;
+  for (i = 0; i < 120 && ball.vy < 0; i++) { g.pointTo(g.paddle.x + 9); g.step(DT); flattest = Math.max(flattest, Math.atan2(Math.abs(ball.vx), Math.abs(ball.vy)) / P.DEG); }
+  ok(flattest <= C.rules.curve.maxDeg + 0.5, 'Curveball: however hard you bend, the path is never flatter than ' + C.rules.curve.maxDeg + ' degrees from vertical (' + flattest.toFixed(1) + ')');
+
+  // ---------------- Safety Wall
+  var L44 = BT.levelById(44);
+  g = launched(L44); var sw = ruleOf(g, 'safetywall'); ball = g.balls[0];
+  g.paddle.x = g.paddle.targetX = 320; park(ball, 40, 520, 0, 300); g.tap();
+  ok(sw.s.up > 0 && sw.s.charges === C.rules.safetywall.charges - 1, 'Safety Wall: a tap raises it and uses a charge');
+  var c0 = sw.s.charges; g.tap(); ok(sw.s.charges === c0, 'Safety Wall: a tap while it is up does nothing');
+  var saved = false; for (i = 0; i < 120 && g.balls.length; i++) { g.step(DT); if (g.balls[0] && g.balls[0].vy < 0) { saved = true; break; } }
+  ok(saved && g.lives === 3, 'Safety Wall: it bounces a ball the paddle missed');
+  sw.s.up = 0; sw.s.charges = 0; g.tap(); ok(sw.s.up === 0, 'Safety Wall: with no charges a tap does nothing');
+  var shield = g.bricks.filter(function (q) { return q.type === 'shield' && q.alive; })[0]; g.destroyBrick(shield, 'test');
+  ok(sw.s.charges === 1, 'Safety Wall: breaking a shield brick gives a charge');
+  sw.s.charges = C.rules.safetywall.max; g.destroyBrick(g.bricks.filter(function (q) { return q.type === 'shield' && q.alive; })[0], 'test');
+  ok(sw.s.charges === C.rules.safetywall.max, 'Safety Wall: never more than ' + C.rules.safetywall.max + ' charges');
+  g = launched(L44, 'easy'); sw = ruleOf(g, 'safetywall'); ball = g.balls[0];
+  ok(sw.s.charges === C.rules.safetywall.chargesEasy && g.netActive, 'Safety Wall: on Easy it starts with ' + sw.s.charges + ' charges, and the safety net is there too');
+  g.paddle.x = g.paddle.targetX = 320; park(ball, 40, 520, 0, 260); g.tap();
+  for (i = 0; i < 120 && ball.vy > 0; i++) g.step(DT);
+  var netAfterWall = g.netActive;
+  sw.s.up = 0; park(ball, 40, 560, 0, 260); var netSaved = false;
+  for (i = 0; i < 120; i++) { g.step(DT); if (g.balls[0] && g.balls[0].vy < 0) { netSaved = true; break; } }
+  ok(netAfterWall && netSaved && g.lives === 5, 'Safety Wall: on Easy a wall save leaves the net for later, and the net still saves the next miss');
+  g = launched(L44); sw = ruleOf(g, 'safetywall');
+  var nb0 = g.balls.length; g.bricks.filter(function (q) { return q.alive && q.required; }).slice(0, C.rules.safetywall.splitEvery).forEach(function (q) { g.destroyBrick(q, 'test'); });
+  ok(g.balls.length === nb0 + 2, 'Safety Wall: the level splits the ball into three every ' + C.rules.safetywall.splitEvery + ' bricks');
+
+  // ---------------- Hatchlings
+  var L46 = BT.levelById(46);
+  g = launched(L46); var ht = ruleOf(g, 'hatch'); ball = g.balls[0];
+  var eggs = g.bricks.filter(function (q) { return q.type === 'egg'; }), warnStart = {}, hatchT = {}, firstHatch = 1e9, critTimes = [], shrunk = false;
+  for (i = 0; i < 120 * 50; i++) {
+    park(ball, 340, 300, 0, -300); g.step(DT);
+    eggs.forEach(function (e, j) { if (e.wobble > 0 && warnStart[j] == null) warnStart[j] = ht.s.t; if (!e.alive && hatchT[j] == null) { hatchT[j] = ht.s.t; firstHatch = Math.min(firstHatch, ht.s.t); } });
+    ht.s.crits.forEach(function (c) { if (c.state === 'ride' && c.tRide == null) { c.tRide = c.age; critTimes.push(c.age); } });
+    if (g.eff.shrink > 0) shrunk = true;
+  }
+  var warnOk = Object.keys(hatchT).every(function (j) { return warnStart[j] != null && hatchT[j] - warnStart[j] >= C.rules.hatch.warn * 0.97; });
+  ok(Object.keys(hatchT).length === eggs.length && warnOk, 'Hatchlings: every egg wobbles for at least ' + C.rules.hatch.warn + 's before it hatches');
+  ok(firstHatch >= C.rules.hatch.first * 0.95, 'Hatchlings: the first egg hatches after ' + firstHatch.toFixed(1) + 's of play');
+  var minWalk = Math.min.apply(null, critTimes.length ? critTimes : [99]);
+  ok(critTimes.length > 0 && minWalk > 8 && shrunk && g.lives === 3, 'Hatchlings: a critter takes ' + minWalk.toFixed(1) + 's to reach the paddle, and only shrinks it (no life lost)');
+  g = launched(L46); ht = ruleOf(g, 'hatch'); ball = g.balls[0];
+  var egg = g.bricks.filter(function (q) { return q.type === 'egg'; })[0]; ht.mod.hatch(g, ht, egg);
+  var cr = ht.s.crits[0]; park(ball, cr.x, cr.y, 0, -200); var sc0 = g.score; g.step(DT);
+  ok(cr.state === 'pop' && g.score > sc0, 'Hatchlings: the ball pops a critter');
+  g = launched(L46); ht = ruleOf(g, 'hatch'); egg = g.bricks.filter(function (q) { return q.type === 'egg'; })[0]; ht.mod.hatch(g, ht, egg);
+  g.bricks.forEach(function (q) { if (q.alive && q.required) q.alive = false; });
+  ok(!g.isCleared(), 'Hatchlings: the level is not cleared while a critter is still walking');
+
+  // ---------------- Puppet Strings
+  var L47 = BT.levelById(47);
+  g = launched(L47); var pu = ruleOf(g, 'puppet'); ball = g.balls[0];
+  g.pointTo(60); for (i = 0; i < 60; i++) { park(ball, 340, 500, 0, -300); g.step(DT); }
+  ok(pu.s.off > 50, 'Puppet Strings: paddle left, the block slides right (' + pu.s.off.toFixed(0) + 'px)');
+  var pb = pu.s.list[0];
+  g.pointTo(300); var into = 0, stopped = pu.s.off;
+  for (i = 0; i < 60; i++) { park(ball, pb.x - ball.r - 1, pb.y + pb.h / 2, 0, 0.001); g.step(DT); park(ball, pb.x - ball.r - 1, pb.y + pb.h / 2, 0, 0.001); if (P.circleRect(ball.x, ball.y, ball.r, pb.x, pb.y, pb.w, pb.h) > 0.5) into++; }
+  ok(into === 0 && pu.s.off >= stopped - 1, 'Puppet Strings: it waits rather than slide into a ball in its way');
+  g = launched(L47); pu = ruleOf(g, 'puppet'); var bot = new Bot(g, BT.mulberry32(47)), bad = 0, overl = 0;
+  for (i = 0; i < 120 * 120 && g.state === 'play'; i++) {
+    bot.act(DT); g.step(DT);
+    for (k = 0; k < pu.s.list.length; k++) {
+      var q = pu.s.list[k]; if (!q.alive) continue;
+      g.balls.forEach(function (bb) { if (P.circleRect(bb.x, bb.y, bb.r, q.x, q.y, q.w, q.h) > 2.5) bad++; });
+      if (g.rectBlocked(q.x, q.y, q.w, q.h, q, -0.01) && g.bricks.some(function (o) { return o !== q && !o.puppet && o.alive && o.solid && o.x < q.x + q.w && o.x + o.w > q.x && o.y < q.y + q.h && o.y + o.h > q.y; })) overl++;
+    }
+  }
+  ok(bad === 0 && overl === 0, 'Puppet Strings: in a long game the block never pushes into the ball or another brick (' + bad + ', ' + overl + ')');
+
+  // ---------------- Builder Bots
+  var L48 = BT.levelById(48);
+  g = launched(L48); var bd = ruleOf(g, 'builders'); ball = g.balls[0];
+  var bot0 = bd.s.bots[0], plan = bot0.plans[2], gone = 0, back = -1;
+  g.sinceLaunch = 10; g.destroyBrick(plan, 'test');
+  for (i = 0; i < 120 * 40 && back < 0; i++) { park(ball, 340, 520, 0, -300); g.step(DT); if (plan.alive) back = i * DT; }
+  ok(back > C.rules.builders.build * 0.95, 'Builder Bots: a broken brick is rebuilt, slowly (' + back.toFixed(1) + 's, ' + C.rules.builders.build + 's of building)');
+  g = launched(L48); bd = ruleOf(g, 'builders'); ball = g.balls[0]; bot0 = bd.s.bots[0]; plan = bot0.plans[1];
+  g.sinceLaunch = 10; g.destroyBrick(plan, 'test');
+  var onBall = 0;
+  for (i = 0; i < 120 * 30; i++) { park(ball, plan.x + plan.w / 2, plan.y + plan.h / 2, 0.001, 0.001); g.step(DT); if (plan.alive && P.circleRect(ball.x, ball.y, ball.r, plan.x, plan.y, plan.w, plan.h) > 0) onBall++; }
+  ok(onBall === 0 && !plan.alive, 'Builder Bots: a brick is never rebuilt on top of the ball (it waits)');
+  park(ball, 340, 520, 0, -300); for (i = 0; i < 120 * 12 && !plan.alive; i++) { park(ball, 340, 520, 0, -300); g.step(DT); }
+  ok(plan.alive, 'Builder Bots: ... and builds it once the ball has gone');
+  g = launched(L48); bd = ruleOf(g, 'builders'); ball = g.balls[0];
+  bd.s.bots.forEach(function (bt) { for (var h = 0; h < C.rules.builders.botHp; h++) g.hitBrick(bt, ball, 'ball'); });
+  ok(bd.s.bots.every(function (bt) { return !bt.alive; }), 'Builder Bots: a bot is knocked out in ' + C.rules.builders.botHp + ' hits');
+  plan = bd.s.bots[0].plans[0]; g.sinceLaunch = 10; g.destroyBrick(plan, 'test');
+  for (i = 0; i < 120 * 30; i++) { park(ball, 340, 520, 0, -300); g.step(DT); }
+  ok(!plan.alive, 'Builder Bots: with the bots gone nothing is rebuilt');
+
+  // ---------------- Paint Job
+  var L49 = BT.levelById(49);
+  g = launched(L49); var pt = ruleOf(g, 'paint'); ball = g.balls[0];
+  var red = g.bricks.filter(function (q) { return q.group === 'red'; })[0], yel = g.bricks.filter(function (q) { return q.group === 'yellow'; })[0];
+  ok(ball.paint === 'yellow', 'Paint Job: the ball starts with a colour');
+  g.hitBrick(red, ball, 'ball'); g.hitBrick(yel, ball, 'ball');
+  ok(red.alive && red.hp === 1 && !yel.alive, 'Paint Job: a yellow ball bounces off red and breaks yellow');
+  var gate = pt.p.gates[0];
+  park(ball, gate.x + gate.w / 2, gate.y - 20, 0, 300); for (i = 0; i < 20; i++) g.step(DT);
+  var keptDown = ball.paint === 'yellow';
+  park(ball, gate.x + gate.w / 2, gate.y + 20, 0, -300); for (i = 0; i < 20; i++) g.step(DT);
+  ok(keptDown && ball.paint === gate.color, 'Paint Job: a gate paints a ball going up through it (not one falling through)');
+  function paintNoDeadEnd(grid, gates, top) {
+    var cols = {}, okAll = true;
+    (grid || []).forEach(function (row) { for (var c = 0; c < row.length; c++) { var ch = row[c]; if (ch === 'R') cols.red = 1; if (ch === 'B') cols.blue = 1; if (ch === 'Y') cols.yellow = 1; } });
+    Object.keys(cols).forEach(function (c) { if (!gates.some(function (q) { return q.color === c; })) okAll = false; });
+    gates.forEach(function (q) { if (q.y < (top || C.TOP) + 60 || q.y > 470 || q.x < 0 || q.x + q.w > C.W) okAll = false; });
+    return okAll;
+  }
+  var arch2 = BT.ARCH_PHASES[1], archGrid = [];
+  for (var rk in arch2.rows) archGrid.push(arch2.rows[rk]);
+  ok(paintNoDeadEnd(L49.grid, pt.p.gates) && paintNoDeadEnd(archGrid, arch2.rule.gates), 'Paint Job: every colour in the level (and in The Architect\'s paint phase) has an open gate, so it can never dead-end');
+  g.splitBalls(); g.step(DT);
+  ok(g.balls.every(function (q) { return !!q.paint; }), 'Paint Job: multi-ball copies have a colour too');
+
+  // ---------------- Cannonball
+  var L51 = BT.levelById(51);
+  g = launched(L51); bot = new Bot(g, BT.mulberry32(51));
+  var rising = 0, maxRise = 0, sinceTouch = 0, maxAir = 0, prevVy = 0, apex = 0;
+  for (i = 0; i < 120 * 120 && g.state !== 'won' && g.state !== 'lost'; i++) {
+    bot.act(DT); g.step(DT);
+    var cb = g.balls[0]; if (!cb || cb.stuck) { rising = 0; sinceTouch = 0; continue; }
+    if (cb.vy < 0) { rising += DT; maxRise = Math.max(maxRise, rising); } else { if (rising > 0) apex++; rising = 0; }
+    sinceTouch += DT; if (prevVy > 0 && cb.vy < 0 && cb.y > 520) { maxAir = Math.max(maxAir, sinceTouch); sinceTouch = 0; }
+    prevVy = cb.vy;
+  }
+  ok(maxRise < 4 && apex > 5, 'Cannonball: the ball always turns over and comes back down (longest climb ' + maxRise.toFixed(1) + 's)');
+  ok(maxAir < 12, 'Cannonball: it is back at the paddle within ' + maxAir.toFixed(1) + 's at most (no hovering)');
+  g = launched(L51); ball = g.balls[0];
+  var topRow = g.bricks.filter(function (q) { return q.alive && q.required; }).reduce(function (a, q) { return Math.min(a, q.y); }, 1e9);
+  var reachTop = 0;
+  for (var off = -0.3; off <= 0.31; off += 0.15) {
+    g = launched(L51); ball = g.balls[0];
+    g.bricks.forEach(function (q) { q.solid = false; }); // out of the way (but the level is not cleared)
+    park(ball, g.paddle.x + off * g.paddle.w / 2, onPaddleY(g, ball) - 1, 0, 10); g.step(DT);
+    var minY = 1e9; for (i = 0; i < 120 * 6 && g.balls.length; i++) { g.step(DT); if (g.balls[0]) minY = Math.min(minY, g.balls[0].y); }
+    if (minY < topRow) reachTop++;
+  }
+  ok(reachTop === 5, 'Cannonball: a shot from the middle part of the paddle always climbs above the top bricks (' + reachTop + '/5)');
+
+  // ---------------- Skyscraper: the camera keeps ball and paddle findable, and moves smoothly
+  var L52 = BT.levelById(52);
+  g = launched(L52); bot = new Bot(g, BT.mulberry32(52)); var sk = ruleOf(g, 'skyscraper');
+  var off1 = 0, padOff = 0, jump = 0, prevCam = 0, topSeen = 0;
+  for (i = 0; i < 120 * 240 && g.state !== 'won' && g.state !== 'lost'; i++) {
+    bot.act(DT); g.realDt = DT; g.step(DT);
+    var low = sk.mod.follow(g);
+    if (low && !low.stuck) {
+      var sy = low.y - g.cam;
+      if (sy < C.TOP - 0.5 || sy > C.H + 0.5) off1++;
+      if (low.y > 380 && low.vy > 0 && g.paddle.y - g.paddle.h / 2 - g.cam > C.H) padOff++;
+    }
+    jump = Math.max(jump, Math.abs(g.cam - prevCam)); prevCam = g.cam;
+    if (g.cam < g.topY - C.TOP + 60) topSeen++;
+  }
+  ok(off1 === 0, 'Skyscraper: the ball the camera follows is always on screen');
+  ok(padOff === 0, 'Skyscraper: whenever the ball is coming down near the paddle, the paddle is on screen too');
+  ok(jump < 9 && sk.s.maxSpeed < 1100, 'Skyscraper: the camera moves smoothly (at most ' + jump.toFixed(1) + 'px a step, ' + sk.s.maxSpeed.toFixed(0) + 'px/s)');
+  ok(topSeen > 0, 'Skyscraper: the view goes all the way up the tower');
+  var tower = []; var fl = L52.rules[0].floors, maxRow = 0;
+  for (var fk in fl) maxRow = Math.max(maxRow, +fk);
+  for (i = 0; i <= maxRow; i++) tower.push(fl[i] || '............');
+  ok(reachable({ id: 52, grid: tower }), 'Skyscraper: every brick in the tower can be reached around the steel');
+
+  // ---------------- By the Numbers
+  var L53 = BT.levelById(53);
+  g = launched(L53); var nm = ruleOf(g, 'numbers'); ball = g.balls[0];
+  var later = nm.s.list[3], first = nm.s.list[0];
+  g.hitBrick(later, ball, 'ball');
+  ok(later.alive && first.isNext && nm.s.wrong === 1, 'By the Numbers: a later number just bounces the ball');
+  g.hitBrick(first, ball, 'ball'); g.step(DT);
+  ok(!first.alive && nm.s.next === 1 && nm.s.list[1].isNext, 'By the Numbers: the next one breaks and the glow moves on');
+  // always reachable: each next brick has an open side reachable from below, with all the others solid
+  var allReach = true;
+  for (var st = 0; st < nm.s.list.length; st++) {
+    var grid = L53.grid.map(function (row) { return row.split(''); });
+    nm.s.list.forEach(function (q, j) { if (j < st) grid[q.row][q.col] = '.'; else if (j > st) grid[q.row][q.col] = '#'; });
+    var tgt = nm.s.list[st]; grid[tgt.row][tgt.col] = 'r';
+    if (!reachable({ id: 53, grid: grid.map(function (rw) { return rw.join(''); }) })) allReach = false;
+  }
+  ok(allReach, 'By the Numbers: every next number can be reached with all the others still standing');
+
+  // ---------------- Flip
+  var L54 = BT.levelById(54);
+  g = launched(L54); var fp = ruleOf(g, 'flip'); bot = new Bot(g, BT.mulberry32(54));
+  var warnLen = 0, warnOkF = true, turns = 0, slowTurn = true, locked = true, onBallF = 0, sideOk = true, last = 'idle';
+  for (i = 0; i < 120 * 120 && g.state !== 'won' && g.state !== 'lost'; i++) {
+    bot.act(DT); g.step(DT);
+    if (fp.s.phase === 'warn') warnLen += DT;
+    if (last !== 'turn' && fp.s.phase === 'turn') { turns++; if (warnLen < C.rules.flip.warn - 0.02) warnOkF = false; warnLen = 0; }
+    if (fp.s.phase === 'turn') { if (!g.warp || Math.abs(g.warp.flip - C.rules.flip.worldScale) > 1e-9) slowTurn = false; if (!g.inputLock) locked = false; }
+    if (fp.s.phase === 'idle') warnLen = 0;
+    last = fp.s.phase;
+    g.bricks.forEach(function (q) {
+      if (!q.side || !q.alive) return;
+      g.balls.forEach(function (bb) { if (q.solid && P.circleRect(bb.x, bb.y, bb.r, q.x, q.y, q.w, q.h) > 2.5) onBallF++; });
+      if (fp.s.phase === 'idle' && !q.pending && q.solid !== ((q.side === 'down') === fp.s.down)) sideOk = false;
+    });
+  }
+  ok(turns >= 2 && warnOkF, 'Flip: every turn has a ' + C.rules.flip.warn + 's countdown first (' + turns + ' turns)');
+  ok(slowTurn && locked, 'Flip: during the turn the world runs at ' + C.rules.flip.worldScale + ' and the paddle waits');
+  ok(sideOk && onBallF === 0, 'Flip: sun bricks are solid the right way up, moon bricks upside down, and never turn solid on the ball');
+  g = launched(L54); fp = ruleOf(g, 'flip'); fp.s.down = true; g.viewFlip = true;
+  var tx0 = g.paddle.targetX; g.dragBy(-20);
+  var dragRight = g.paddle.targetX > tx0;
+  g.pointTo(50);
+  ok(dragRight && Math.abs(g.paddle.targetX - (C.W - 50)) < 1e-9, 'Flip: upside down, a drag to the left still moves the paddle left on screen, and a mouse puts it under the pointer');
+  ok(new BT.Game(L54, 'easy', { seed: 1 }).rules[0].s.every > new BT.Game(L54, 'normal', { seed: 1 }).rules[0].s.every, 'Flip: rarer on Easy');
+
+  // ---------------- The Keeper: reads straight shots; a curve after it commits or a Power Shot beats it
+  var L45 = BT.levelById(45);
+  function shot(kind, sd) {
+    var gg = launched(L45, 'normal', sd), kp = gg.boss, b = gg.balls[0], q = kp.s.xp, rr = BT.mulberry32(sd);
+    var x = 90 + rr() * 180, aim = kp.s.gx0 + 20 + rr() * (kp.s.gx1 - kp.s.gx0 - 40);
+    var ang = Math.atan2(aim - x, 440 - (gg.topY + 10)), spd = gg.speed();
+    park(b, x, 440, Math.sin(ang) * spd, -Math.cos(ang) * spd); b.spin = C.rules.curve.budget;
+    if (kind === 'power') { b.powered = true; b.pierce = 3; }
+    gg.paddle.x = gg.paddle.targetX = 180;
+    var dir = 0;
+    for (var s2 = 0; s2 < 400; s2++) {
+      if (kind === 'curve' && kp.s.commit && b.vy < 0) { // once it has dived: bend the ball away from it, until it would go past
+        var lx = P.predictLandingX(b.x, -b.y, b.vx, -b.vy, -(gg.topY + b.r), b.r, C.W - b.r);
+        if (!dir) dir = kp.s.tx < b.x ? 1 : -1;
+        if (Math.abs(lx - kp.s.tx) < q.w / 2 + 16) gg.pointTo(gg.paddle.x + dir * 4); // a steady sweep, about 480 px/s
+      }
+      var g0 = kp.s.goals; gg.step(DT);
+      if (kp.s.goals > g0) return 'goal';
+      if (b.vy > 0 && b.y > q.y + 20) return 'save';
+    }
+    return 'none';
+  }
+  var res = { straight: 0, curve: 0, power: 0 }, nShots = 24;
+  ['straight', 'curve', 'power'].forEach(function (kd) { for (var sd = 1; sd <= nShots; sd++) if (shot(kd, sd) === 'goal') res[kd]++; });
+  ok(res.straight <= nShots * 0.35, 'The Keeper: it saves most straight shots (' + res.straight + '/' + nShots + ' go in)');
+  ok(res.curve >= nShots * 0.6 && res.power >= nShots * 0.75, 'The Keeper: curved shots (' + res.curve + '/' + nShots + ') and Power Shots (' + res.power + '/' + nShots + ') beat it');
+
+  // ---------------- The Queen
+  var L50 = BT.levelById(50);
+  g = launched(L50); var qn = g.boss; var hp0 = qn.s.hp;
+  qn.s.mode = 'shut'; qn.s.hitCd = 0; qn.mod.hit(g, qn);
+  var noHurt = qn.s.hp === hp0;
+  qn.s.mode = 'brood'; qn.s.hitCd = 0; qn.mod.hit(g, qn);
+  ok(noHurt && qn.s.hp === hp0 - 1, 'The Queen: she can be hit while her eggs are shut, not while her shell is closed');
+  g = launched(L50); qn = g.boss; ball = g.balls[0];
+  qn.s.slots.forEach(function (sl) { if (sl.egg) { sl.egg.alive = false; sl.egg = null; } });
+  qn.s.mode = 'shut'; qn.s.timer = 0.01; var target = qn.s.slots[0], tq = qn.mod.slotPos(qn, target), laidOnBall = 0;
+  for (i = 0; i < 120 * 4; i++) { park(ball, tq.x, tq.y, 0.001, 0.001); g.step(DT); if (target.egg && target.egg.alive && P.circleRect(ball.x, ball.y, ball.r, target.egg.x, target.egg.y, target.egg.w, target.egg.h) > 0) laidOnBall++; }
+  var others = qn.s.slots.filter(function (sl) { return sl.egg; }).length;
+  ok(laidOnBall === 0 && !target.egg && others > 10, 'The Queen: she lays a fresh clutch, but never an egg on top of the ball');
+  g = launched(L50); qn = g.boss; var hatched0 = qn.s.hatch.s.hatched, nBrood = Math.round((qn.s.timer + 1.5) / DT);
+  for (i = 0; i < nBrood; i++) { park(g.balls[0], 340, 520, 0, -300); g.step(DT); }
+  ok(qn.s.hatch.s.hatched > hatched0 + 10, 'The Queen: when the brood ends her eggs hatch (' + (qn.s.hatch.s.hatched - hatched0) + ')');
+
+  // ---------------- The Architect: four phases borrowing act-two rules, clean change-overs
+  g = launched(BT.levelById(55)); var ar = g.boss; ball = g.balls[0];
+  var seenA = [], hurt = false, ghostHit = 0;
+  for (var phz = 0; phz < 4; phz++) {
+    seenA.push(ar.s.sub ? ar.s.sub.id : '-');
+    var guard = 0;
+    while (ar.s.phase === phz && !ar.s.defeated && guard++ < 50) { ar.s.hitCd = 0; ar.mod.hitCore(g, ar); }
+    if (ar.s.defeated) break;
+    var hpA = ar.s.hp; ar.s.hitCd = 0; ar.mod.hitCore(g, ar); if (ar.s.hp !== hpA) hurt = true;
+    if (seenA[phz] && ruleOf(g, seenA[phz])) seenA.push('NOT REMOVED');
+    var rowY = C.grid.top + 8 * C.grid.cellH + 8;
+    for (i = 0; i < Math.ceil((C.bosses.architect.transition + 1) / DT); i++) {
+      park(ball, 135, rowY, 1, 1); g.step(DT); park(ball, 135, rowY, 1, 1);
+      g.bricks.forEach(function (q) { if (q.alive && q.solid && q.archPart && P.circleRect(ball.x, ball.y, ball.r, q.x, q.y, q.w, q.h) > 0.5) ghostHit++; });
+    }
+  }
+  ok(seenA.join(',') === 'puppet,paint,builders,cannon' && ar.s.defeated, 'The Architect: four phases borrow Puppet Strings, Paint Job, Builder Bots and Cannonball in turn, each taken out after (' + seenA.join(',') + ')');
+  ok(!hurt, 'The Architect: the core cannot be hurt during a change-over');
+  ok(ghostHit === 0, 'The Architect: new parts never turn solid on top of the ball');
+  ok(ball.minVy == null && !ball.paint && g.powers.length === 3, 'The Architect: borrowed rules tidy up after themselves; the three powers stay for the whole fight');
+  ok(C.bosses.architect.hp.length === 4 && C.bosses.architect.hp.reduce(function (a, b) { return a + b; }, 0) > C.bosses.machine.hp.reduce(function (a, b) { return a + b; }, 0), 'The Architect: a bigger finale than The Machine (four phases, more hits)');
+
+  // ---------------- act-two engine extension points stay off unless a rule switches them on
+  var g0 = new BT.Game(BT.levelById(1), 'normal', { seed: 1 });
+  ok(g0.powers.length === 0 && g0.warp === null && g0.topY === C.TOP && g0.cam === 0 && !g0.viewFlip && g0.viewAngle === 0 && !g0.inputLock && g0.balls[0].minVy === null,
+    'act-two engine extension points are all off by default');
 })();
 
 // Greedy solver for Twelve Bounces: for each bounce try 13 landing points on the paddle, keep the one that
@@ -1049,6 +1603,18 @@ section('Save data');
   for (li = 26; li <= 39; li++) S.record(li, 1, 10);
   ok(S.isUnlocked(40) && S.totalStars() === 64, 'clearing up to 39 opens the final boss');
 
+  // a phase-4 player who has finished the whole of act one (and played Endless) finds World 9 open, nothing lost
+  var p4 = { v: 2, progress: {}, difficulty: 'normal', muted: false, seen: { capsules: true, 'boss-machine': true }, endless: { normal: { round: 9, score: 12345 } } };
+  for (li = 1; li <= 40; li++) p4.progress[li] = { stars: (li % 3) + 1, best: li * 100, cleared: true };
+  var st4 = new MemStore(); st4.m[C.saveKey] = JSON.stringify(p4);
+  S.init(st4);
+  var same4 = true, tot4 = 0;
+  for (li = 1; li <= 40; li++) { var in4 = S.levelInfo(li); tot4 += (li % 3) + 1; if (in4.stars !== (li % 3) + 1 || in4.best !== li * 100 || !in4.cleared) same4 = false; }
+  ok(same4 && S.isUnlocked(41) && !S.isUnlocked(42) && S.totalStars() === tot4 && S.endlessBest('normal').round === 9 && S.endlessBest('normal').score === 12345 && S.data.seen['boss-machine'],
+    'phase-4 save: every star, score, setting and Endless best kept; level 41 (World 9) unlocked, 42 still locked');
+  S.record(41, 3, 500);
+  ok(S.isUnlocked(42) && !S.isUnlocked(43), 'clearing 41 unlocks 42 (in order)');
+
   var bad = { getItem: function () { throw new Error('denied'); }, setItem: function () { throw new Error('denied'); } };
   var threw = false;
   try { S.init(bad); S.record(1, 3, 10); S.setMuted(true); } catch (e) { threw = true; }
@@ -1070,7 +1636,7 @@ function finish() {
 
 // ------------------------------------------------------------------ Endless
 function endlessSection() {
-  var E = BT.Endless, ALL = [1, 2, 3, 4, 5, 6, 7, 8], PRESETS = ['easy', 'normal', 'hard'], reg = BT.Rules.registry;
+  var E = BT.Endless, ALL = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], ALL8 = [1, 2, 3, 4, 5, 6, 7, 8], PRESETS = ['easy', 'normal', 'hard'], reg = BT.Rules.registry;
   var SAFE_Y = 470; // nothing but the paddle and the serve ball below here at the start of a round
 
   section('Endless: twists and what may mix');
@@ -1102,8 +1668,21 @@ function endlessSection() {
     ok(n >= 3, 'twist ' + a + ' has partners (' + n + ')');
   });
 
+  section('Endless: players who have not finished act two get exactly the rounds they got before');
+  (function () {
+    // hashes of the rounds the phase-4 build generated for the same inputs (seeds 1-12, rounds 1-12)
+    var WANT = { 1: 'bfdf93aa', 4: 'bf874b39', 7: '3d556c71', 8: '2bbdc4de' };
+    function fnv(str, h) { h = h >>> 0; for (var q = 0; q < str.length; q++) { h ^= str.charCodeAt(q); h = Math.imul(h, 16777619) >>> 0; } return h; }
+    [[1], [1, 2, 3, 4], [1, 2, 3, 4, 5, 6, 7], ALL8].forEach(function (ws) {
+      var h = 2166136261;
+      for (var sd = 1; sd <= 12; sd++) for (var rd = 1; rd <= 12; rd++) h = fnv(JSON.stringify(E.generate({ seed: sd * 7919 + 3, round: rd, preset: PRESETS[(sd + rd) % 3], worlds: ws })), h);
+      ok(h.toString(16) === WANT[ws.length], 'Endless with Worlds 1-' + ws.length + ' finished: the same rounds as before act two (' + h.toString(16) + ')');
+    });
+    ok(E.pool(ALL8).every(function (id) { return E.TWISTS[id].world <= 8; }) && E.pool(ALL8).length === 25, 'the act-one pool is unchanged (25 twists)');
+  })();
+
   section('Endless: generated rounds (fair, reachable, deterministic)');
-  var t0 = Date.now(), WSETS = [[1], [1, 2], [1, 2, 3], [1, 2, 3, 4], [1, 2, 3, 4, 5], [1, 2, 3, 4, 5, 6], [1, 2, 3, 4, 5, 6, 7], ALL];
+  var t0 = Date.now(), WSETS = [[1], [1, 2], [1, 2, 3], [1, 2, 3, 4], [1, 2, 3, 4, 5], [1, 2, 3, 4, 5, 6], [1, 2, 3, 4, 5, 6, 7], ALL8, [1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], ALL];
   var NSEED = QUICK ? 12 : 50, NROUND = 30, n = 0, bad = {}, seenTw = {}, maxAtt = 0, sumAtt = 0;
   function fail(why, L) { bad[why] = (bad[why] || 0) + 1; if (bad[why] <= 2) console.log('    ' + why + ': seed ' + L.seed + ' round ' + L.round + ' ' + L.twists.join('+')); }
   WSETS.forEach(function (ws) {
@@ -1117,7 +1696,8 @@ function endlessSection() {
       L.twists.forEach(function (t) { seenTw[t] = true; if (allowed.indexOf(t) < 0) fail('twist from an unfinished world', L); });
       if (!E.legalSet(L.twists)) fail('illegal twist set', L);
       var want = rd >= C.endless.threeFrom ? 3 : 2;
-      if (L.twists.length > want || (ws.length === 8 && L.twists.length !== want) || L.twists.length < Math.min(2, allowed.length)) fail('wrong number of twists', L);
+      if (L.twists.length > want || (ws.length >= 8 && L.twists.length !== want) || L.twists.length < Math.min(2, allowed.length)) fail('wrong number of twists', L);
+      if (L.twists.some(function (t) { return reg[t] && reg[t].power; }) && !(L.noCapsules && L.noCapsules.indexOf('laser') >= 0)) fail('a power round with lasers', L);
       var why = endlessReach(L);
       if (why) fail('unreachable: ' + why, L);
       why = endlessPlacement(L, preset, rd);
@@ -1172,6 +1752,8 @@ function endlessSection() {
           if (r.id === 'gusts' && r.s.phase === 'gust') moved++;
           if (r.id === 'brickfall' && r.s.left < r.p.pieces) moved++;
           if (r.id === 'overgrown' && r.s.sprouts.length) moved++;
+          if (r.id === 'hatch' && r.s.hatched) moved++;
+          if (r.id === 'flip' && r.s.phase !== 'idle') moved++;
         });
       }
       nn++;
@@ -1206,10 +1788,14 @@ function endlessSection() {
     return { reached: round, cleared: times.length, times: times, rep: rep, stuck: stuck, score: score };
   }
   var runs = [];
-  [1, 2, 3, 4, 5, 6].slice(0, QUICK ? 3 : 6).forEach(function (sd) { runs.push({ label: 'Normal, all worlds, seed ' + sd, need: 10, r: runEndless(sd, 'normal', ALL, 12) }); });
+  // the act-one runs, exactly as before (all eight act-one worlds), then the same with act two finished
+  [1, 2, 3, 4, 5, 6].slice(0, QUICK ? 3 : 6).forEach(function (sd) { runs.push({ label: 'Normal, Worlds 1-8, seed ' + sd, need: 10, r: runEndless(sd, 'normal', ALL8, 12) }); });
+  [21, 22, 23, 24, 25, 26].slice(0, QUICK ? 2 : 6).forEach(function (sd) { runs.push({ label: 'Normal, all 11 worlds, seed ' + sd, need: 10, r: runEndless(sd, 'normal', ALL, 12) }); });
   if (!QUICK) {
-    runs.push({ label: 'Easy, all worlds, seed 7', need: 10, r: runEndless(7, 'easy', ALL, 12) });
-    runs.push({ label: 'Hard, all worlds, seed 8', need: 10, r: runEndless(8, 'hard', ALL, 12) });
+    runs.push({ label: 'Easy, Worlds 1-8, seed 7', need: 10, r: runEndless(7, 'easy', ALL8, 12) });
+    runs.push({ label: 'Hard, Worlds 1-8, seed 8', need: 10, r: runEndless(8, 'hard', ALL8, 12) });
+    runs.push({ label: 'Easy, all 11 worlds, seed 27', need: 10, r: runEndless(27, 'easy', ALL, 12) });
+    runs.push({ label: 'Hard, all 11 worlds, seed 28 (info)', need: 0, r: runEndless(28, 'hard', ALL, 12) });
     runs.push({ label: 'Normal, World 1 only, seed 9', need: 10, r: runEndless(9, 'normal', [1], 11) });
     runs.push({ label: 'Normal, Worlds 1-4, seed 10', need: 10, r: runEndless(10, 'normal', [1, 2, 3, 4], 11) });
     runs.push({ label: 'Clumsy bot on Easy, seed 11 (info)', need: 0, r: runEndless(11, 'easy', ALL, 12, true) });
@@ -1237,8 +1823,9 @@ function endlessSection() {
     ok(!E.unlocked(cleared(4)) && E.unlocked(cleared(5)), 'Endless is locked until World 1 is finished (level 5 cleared)');
     ok(JSON.stringify(E.completedWorlds(cleared(5))) === '[1]' && JSON.stringify(E.completedWorlds(cleared(24))) === '[1,2,3,4]' && E.completedWorlds(cleared(40)).length === 8, 'finished worlds follow the cleared boss levels');
     C.endless.unlockAll = true;
-    ok(E.unlocked(cleared(0)) && E.completedWorlds(cleared(0)).length === 8, 'the CONFIG flag unlocks Endless and every twist for testing');
+    ok(E.unlocked(cleared(0)) && E.completedWorlds(cleared(0)).length === 11, 'the CONFIG flag unlocks Endless and every twist for testing');
     C.endless.unlockAll = false;
+    ok(JSON.stringify(E.completedWorlds(cleared(45))) === '[1,2,3,4,5,6,7,8,9]' && E.completedWorlds(cleared(55)).length === 11, 'finishing a world of act two adds its twists');
 
     function MemStore(init) { this.m = init || {}; }
     MemStore.prototype.getItem = function (k) { return this.m.hasOwnProperty(k) ? this.m[k] : null; };

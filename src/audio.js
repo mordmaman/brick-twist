@@ -118,6 +118,21 @@
         case 'revive': this.tone('sine', 220, 660, 0.4, 0.16); break;
         case 'drip': this.tone('sine', 1200, 600, 0.09, 0.12); break;
         case 'puff': this.hiss(0.12, 0.12, 'lowpass', 1200); break;
+        // act two
+        case 'powershot': this.tone('sawtooth', 220, 1320, 0.16, 0.14); this.tone('square', 880, 1760, 0.1, 0.08, 0.04); this.hiss(0.15, 0.12, 'highpass', 2500); break;
+        case 'slowon': this.tone('sine', 700, 180, 0.45, 0.16); break;
+        case 'slowoff': this.tone('sine', 180, 700, 0.25, 0.12); break;
+        case 'wallup': this.tone('triangle', 200, 800, 0.18, 0.16); this.tone('sine', 1200, 1200, 0.2, 0.06, 0.1); break;
+        case 'hatch': this.tone('square', 1200, 1500, 0.04, 0.08); this.tone('triangle', 660, 990, 0.12, 0.14, 0.05); break;
+        case 'pop': this.tone('sine', 500, 1400, 0.09, 0.2); this.tone('triangle', 1400, 900, 0.08, 0.08, 0.06); break;
+        case 'build': this.tone('square', 300, 300, 0.04, 0.1); this.tone('square', 450, 450, 0.06, 0.1, 0.06); break;
+        case 'robot': this.tone('square', 520, 520, 0.05, 0.06); this.tone('square', 390, 390, 0.05, 0.06, 0.06); break;
+        case 'paint': f = [523, 659, 784][arg || 0] || 659; this.tone('sine', f, f * 1.5, 0.14, 0.16); this.hiss(0.1, 0.06, 'bandpass', 3000, 0, 2); break;
+        case 'goal': [523, 659, 784, 1047, 784, 1047].forEach(function (n, i) { this.tone('square', n, n, 0.1, 0.1, i * 0.07); }, this); this.hiss(0.8, 0.12, 'bandpass', 1500, 0.1, 0.5); break;
+        case 'lay': this.tone('triangle', 330, 220, 0.3, 0.14); break;
+        case 'tick': this.tone('square', arg === 1 ? 1100 : 800, arg === 1 ? 1100 : 800, 0.05, 0.12); break;
+        case 'flipturn': this.tone('sawtooth', 160, 640, 0.9, 0.1); this.tone('sine', 320, 1280, 0.9, 0.08); break;
+        case 'numok': semis = Math.min(arg || 0, 12); f = 523 * Math.pow(2, semis / 12); this.tone('triangle', f, f, 0.12, 0.2); this.tone('sine', f * 2, f * 2, 0.16, 0.08, 0.05); break;
       }
     }
   };

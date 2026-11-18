@@ -15,7 +15,7 @@ SRC = os.path.join(ROOT, 'src')
 
 # Load order matters: config first, main last.
 ORDER = [
-    'config.js', 'physics.js', 'bricks.js', 'rules.js', 'bosses.js', 'levels.js', 'endless.js',
+    'config.js', 'physics.js', 'bricks.js', 'rules.js', 'rules2.js', 'bosses.js', 'bosses2.js', 'levels.js', 'endless.js',
     'game.js', 'save.js', 'particles.js', 'audio.js', 'render.js', 'input.js', 'ui.js', 'main.js',
 ]
 

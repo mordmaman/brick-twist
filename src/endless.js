@@ -43,26 +43,43 @@
     runaway: { world: 8, heat: 2, tags: ['mover'], name: 'Runaways', tip: 'Bricks run away from the ball' },
     bigsmall: { world: 8, heat: 1, tags: ['pierce', 'field'], name: 'Big and Small', tip: 'Hit a splitter to break the big ball' },
     walls: { world: 8, heat: 2, tags: ['sides', 'crush'], name: 'Closing Walls', tip: 'Walls close in. Hit the pushers!' },
-    mirrors: { world: 8, heat: 2, tags: ['field'], name: 'Hall of Mirrors', tip: 'Mirrors turn the ball' }
+    mirrors: { world: 8, heat: 2, tags: ['field'], name: 'Hall of Mirrors', tip: 'Mirrors turn the ball' },
+    // act two. Powers help the player (heat 1); one power a round, so a tap always means one thing.
+    powershot: { world: 9, heat: 1, tags: ['power'], name: 'Power Shot', tip: 'Tap as the ball lands to smash through' },
+    slowmo: { world: 9, heat: 1, tags: ['power'], name: 'Slow-Mo', tip: 'Tap to slow time down' },
+    curve: { world: 9, heat: 1, tags: ['power', 'force'], name: 'Curveball', tip: 'Move the paddle to bend the ball' },
+    safetywall: { world: 9, heat: 1, tags: ['power'], name: 'Safety Wall', tip: 'Tap to raise a wall under you' },
+    hatch: { world: 10, heat: 2, tags: ['critter'], name: 'Hatchlings', tip: 'Eggs hatch into critters. Bop them!' },
+    paint: { world: 10, heat: 2, tags: ['field'], name: 'Paint Job', tip: 'Paint the ball to match the bricks' },
+    cannon: { world: 11, heat: 2, tags: ['force', 'zone'], name: 'Cannonball', tip: 'A heavy ball that flies in arcs' },
+    flip: { world: 11, heat: 2, tags: ['view'], name: 'Flip', tip: 'Now and then it all turns upside down' }
   };
   // Stable order (also the order rules are added to a round; Lights Out last so its dark covers the others).
   var ORDER = ['fuse', 'lockkey', 'orbit', 'pendulum', 'brickfall', 'conveyor', 'squeeze', 'runaway', 'portals', 'wells',
     'gusts', 'pinball', 'redblue', 'beat', 'overgrown', 'double', 'wrap', 'ice', 'tide', 'redhot', 'thunder', 'bigsmall',
-    'walls', 'mirrors', 'lightsout'];
+    'walls', 'mirrors', 'hatch', 'paint', 'cannon', 'powershot', 'slowmo', 'curve', 'safetywall', 'flip', 'lightsout'];
+  // (act-two twists sit before Lights Out; among the older twists the order, and so every older round, is unchanged)
 
   // Left out of Endless, and why.
   var EXCLUDED = {
     bounces: 'Twelve Bounces is a puzzle with free retries and no lives; it needs a hand-made solvable layout',
-    bosses: 'boss fights are hand-built set pieces (not needed in Endless)'
+    bosses: 'boss fights are hand-built set pieces (not needed in Endless)',
+    puppet: 'Puppet Strings needs a hand-made block with room to slide and a gap under it to aim through',
+    builders: 'Builder Bots need hand-made rails under a wall, with every rebuilt brick clear of the ball',
+    skyscraper: 'Skyscraper is a three-screen tower; Endless layouts are one screen',
+    numbers: 'By the Numbers needs a hand-made order where every next brick is reachable past the others'
   };
 
   // At most one twist per tag in a round. 'field' (things placed in the open play area) allows two.
-  var CAP_TAGS = { owner: 1, mover: 1, crush: 1, ghost: 1, force: 1, paddle: 1, pierce: 1, sides: 1, top: 1, grower: 1, field: 2 };
+  var CAP_TAGS = { owner: 1, mover: 1, crush: 1, ghost: 1, force: 1, paddle: 1, pierce: 1, sides: 1, top: 1, grower: 1, field: 2,
+    power: 1, critter: 1, zone: 1, view: 1 };
   var TAG_WHY = {
     owner: 'both build the whole layout', mover: 'both move the bricks', crush: 'two ways to be crushed at once',
     ghost: 'both make bricks see-through', force: 'two forces pushing the ball', paddle: 'two handicaps on the paddle',
     pierce: 'both use the burn-through count', sides: 'both change the side walls', top: 'both change the top',
-    grower: 'both grow bricks', field: 'the open play area gets too crowded'
+    grower: 'both grow bricks', field: 'the open play area gets too crowded',
+    power: 'one power a round, so a tap always means one thing', critter: 'one lot of critters is plenty',
+    zone: 'both change the ball\'s speed by where it is', view: 'one way of turning the view is plenty'
   };
   // Pairs that do not mix, beyond the tags.
   var CONFLICTS = [
@@ -82,7 +99,29 @@
     ['brickfall', 'fuse', 'the fuse layout does not settle with the stack'],
     ['squeeze', 'lockkey', 'a closed vault coming down is no fun'],
     ['redblue', 'walls', 'the switches stop the walls'],
-    ['ice', 'thunder', 'a frozen paddle sliding is too much']
+    ['ice', 'thunder', 'a frozen paddle sliding is too much'],
+    // act two
+    ['paint', 'redblue', 'both use the red and blue bricks'],
+    ['paint', 'beat', 'a see-through brick of the wrong colour is too much to read'],
+    ['paint', 'bigsmall', 'the splitter sits where the gates go'],
+    ['paint', 'walls', 'the closing walls would cover the side gates'],
+    ['paint', 'runaway', 'a runaway layout is tall and leaves no room for three gates'],
+    ['paint', 'double', 'the bricks sit low under the top paddle, with no room for the gates'],
+    ['hatch', 'runaway', 'eggs would run away from the ball'],
+    ['hatch', 'brickfall', 'eggs do not settle with the stack'],
+    ['tide', 'cannon', 'both change the ball\'s speed by where it is'],
+    ['double', 'cannon', 'a lobbed ball and an open top do not mix'],
+    ['double', 'flip', 'with two paddles, which way up is it?'],
+    ['double', 'powershot', 'the top paddle sits right under the power strip'],
+    ['double', 'slowmo', 'the top paddle sits right under the power strip'],
+    ['double', 'curve', 'the top paddle sits right under the power strip'],
+    ['double', 'safetywall', 'the top paddle sits right under the power strip'],
+    ['flip', 'redblue', 'the colour legend would be upside down'],
+    ['flip', 'tide', 'the tide gauge would be upside down'],
+    ['flip', 'thunder', 'lightning from below is too confusing'],
+    ['flip', 'paint', 'the paint gates would point the wrong way'],
+    ['flip', 'portals', 'too many ways round at once'],
+    ['flip', 'mirrors', 'mirrors turned upside down are too hard to read']
   ];
 
   function hasTag(id, tag) { var t = TWISTS[id].tags; return !!t && t.indexOf(tag) >= 0; }
@@ -191,7 +230,7 @@
 
   // ---------------------------------------------------------------- layout helpers
   var COLOURS = 'roygcbpm';
-  var BREAKABLE = 'roygcbpmw23TKCGRBVOI';   // grid chars a ball can break (L counts once its key is hit)
+  var BREAKABLE = 'roygcbpmw23TKCGRBVOIFEY';   // grid chars a ball can break (L counts once its key is hit)
   var HITTABLE = 'ASXH';                    // unbreakable chars a ball must be able to touch (anchor, switch, splitter, pusher)
   function rowY(r) { return GR.top + r * GR.cellH; }
   function colX(c) { return c * GR.cellW; }
@@ -369,7 +408,7 @@
   PL.build = function () {
     var rng = this.rng, d = this.d, h = this.has, i, r, c, cols;
     this.colourOfs = rint(rng, 0, 7);
-    var hasField = h.portals || h.wells || h.pinball || h.mirrors || h.bigsmall;
+    var hasField = h.portals || h.wells || h.pinball || h.mirrors || h.bigsmall || h.paint;
 
     // ---- whole-layout twists
     if (h.orbit) { this.buildOrbit(); return this.finishField(); }
@@ -379,6 +418,7 @@
     // ---- the frame of the layout
     if (h.walls) { this.colMin = 3; this.colMax = COLS - 4; }
     this.top0 = h.double ? 8 : (h.portals ? 3 : 0); // Portals: an open strip at the top for the far portal
+    if (this.power()) this.top0 = Math.max(this.top0 + (h.portals ? 1 : 0), 1); // the power strip takes the top of the field
     var depth = Math.max(h.redblue ? 2 : 0, h.walls ? 3 : 0, h.bigsmall ? 5 : 0);
     var limit = hasField ? 15 : 18;
     this.nRows = Math.round(lerp(E.rows, d)) + rint(rng, -1, 0);
@@ -409,6 +449,9 @@
     if (h.fuse) this.addFuse();
     if (h.lockkey) this.addVault();
     if (h.lightsout) this.sprinkle('G', 2, 3);
+    if (h.hatch) this.sprinkle('E', 2, 2 + Math.round(d * 2));
+    if (h.safetywall) this.sprinkle('F', 1, 2);
+    if (h.paint) this.addPaint();
     if (h.ice) this.sprinkle('I', 3 + Math.round(d * 3), 6 + Math.round(d * 4));
     if (h.overgrown) this.addRoots();
     if (h.redblue) this.addRedBlue();
@@ -420,6 +463,16 @@
     if (!h.runaway) this.addSteel();
     if (h.conveyor) this.addConveyor();
     return this.finishField();
+  };
+
+  PL.power = function () { var h = this.has; return !!(h.powershot || h.slowmo || h.curve || h.safetywall); };
+
+  // Paint Job: colour bricks by thirds of the field (red left, yellow middle, blue right); the gates go in finishField.
+  PL.addPaint = function () {
+    for (var r = this.top0; r <= this.layoutBottom(); r++) for (var c = 0; c < COLS; c++) {
+      if (!isColour(this.at(r, c))) continue;
+      this.set(r, c, c < 4 ? 'R' : (c < 8 ? 'Y' : 'B'));
+    }
   };
 
   // Turn some coloured bricks into ch, in mirrored pairs.
@@ -596,7 +649,7 @@
       e = this.place(rad, 'portal', box, function () { return { x: side ? box.x1 - rad - 6 - rng() * 30 : box.x0 + rad + 6 + rng() * 30, y: box.y0 + rad + rng() * (box.y1 - box.y0 - 2 * rad) }; });
       if (!e) return this.fail('no room for a portal');
       var ex = 70 + Math.round(rng() * 220);
-      this.rules.push({ id: 'portals', pairs: [[{ x: e.x, y: e.y }, { x: ex, y: GR.top + 20 }]] });
+      this.rules.push({ id: 'portals', pairs: [[{ x: e.x, y: e.y }, { x: ex, y: GR.top + (this.power() ? 28 : 20) }]] });
     }
     if (h.bigsmall) {
       var anyX = false;
@@ -618,6 +671,16 @@
       if (!bumpers.length) return this.fail('no room for a bumper');
       var gates = rng() < 0.5 ? [{ x1: 0, x2: 60, y: 452 }, { x1: 300, x2: 360, y: 452 }] : [];
       this.rules.push({ id: 'pinball', bumpers: bumpers, gates: gates });
+    }
+    if (h.paint) { // one gate per colour, under its third of the field
+      var gates = [], cols = ['red', 'yellow', 'blue'];
+      for (i = 0; i < 3; i++) {
+        var gx = 60 + i * 120, gw = 64;
+        e = this.place(gw / 2 + 2, 'gate', box, function () { return { x: gx + (rng() - 0.5) * 16, y: box.y0 + gw / 2 + 4 + rng() * Math.max(0, box.y1 - box.y0 - gw - 8) }; });
+        if (!e) return this.fail('no room for a paint gate');
+        gates.push({ x: e.x - gw / 2, y: e.y, w: gw, color: cols[i] });
+      }
+      this.rules.push({ id: 'paint', start: 'yellow', gates: gates });
     }
     if (h.mirrors) {
       var mirrors = [], nm = rint(rng, 2, 3), half = (this.preset === 'easy' ? C.rules.mirrors.lenEasy : C.rules.mirrors.len) / 2;
@@ -642,6 +705,13 @@
       thunder: function () { return { id: 'thunder' }; },
       bigsmall: function () { return { id: 'bigsmall' }; },
       walls: function () { return { id: 'walls' }; },
+      hatch: function () { return { id: 'hatch' }; },
+      cannon: function () { return { id: 'cannon' }; },
+      powershot: function () { return { id: 'powershot' }; },
+      slowmo: function () { return { id: 'slowmo' }; },
+      curve: function () { return { id: 'curve' }; },
+      safetywall: function () { return { id: 'safetywall', splitEvery: 0 }; },
+      flip: function () { return { id: 'flip' }; },
       lightsout: function () { return { id: 'lightsout' }; }
     };
     for (i = 0; i < ORDER.length; i++) if (h[ORDER[i]] && spec[ORDER[i]]) this.rules.push(spec[ORDER[i]]());
@@ -698,7 +768,8 @@
       banner: tips.join(' · '), par: 9999,
       clear: P.clear || 'bricks',
       capsuleChance: P.capsuleChance != null ? P.capsuleChance : lerp(E.capsuleChance, P.d),
-      grid: P.grid(), rules: P.rules.slice()
+      grid: P.grid(), rules: P.rules.slice(),
+      noCapsules: P.power() ? ['laser', 'catch'] : undefined // a tap is a power in these rounds
     };
   }
 
@@ -710,6 +781,7 @@
       if (ru.id === 'pinball') ru.bumpers.forEach(function (p) { els.push({ x: p.x, y: p.y, r: C.rules.pinball.bumperRadius }); });
       if (ru.id === 'portals') ru.pairs.forEach(function (pr) { els.push({ x: pr[0].x, y: pr[0].y, r: C.rules.portals.radius }, { x: pr[1].x, y: pr[1].y, r: C.rules.portals.radius }); });
       if (ru.id === 'mirrors') ru.mirrors.forEach(function (m) { els.push({ x: m.x, y: m.y, r: C.rules.mirrors.lenEasy / 2 + 2 }); });
+      if (ru.id === 'paint') ru.gates.forEach(function (q) { els.push({ x: q.x + q.w / 2, y: q.y, r: q.w / 2 }); });
     });
     var paddleTop = C.paddle.y - C.paddle.h / 2 - 2 * C.ball.radius - 40;
     for (i = 0; i < els.length; i++) {

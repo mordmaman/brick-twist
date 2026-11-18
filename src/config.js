@@ -7,6 +7,8 @@
     W: 360,
     H: 640,
     TOP: 44,              // top wall (HUD sits above it)
+    powerStrip: 26,       // act two: levels with player powers show them in a strip under the HUD; the field starts lower
+    powerStripBoss: 40,   // ... with a boss bar as well
     physicsHz: 120,       // fixed physics step rate
     maxFrameDt: 0.1,      // clamp on a long frame (tab switch etc.)
 
@@ -147,7 +149,60 @@
       },
       bigsmall: { bigR: 12, bigSpeed: 0.78, bigPierce: 3, smallR: 4.2, smallSpeed: 1.22, split: 3, splitCooldown: 0.3 },
       walls: { speed: 2.2, maxIn: 62, shove: 34, grace: 3, shoveCooldown: 0.4, reliefOnLife: 40, gap: 30 },
-      mirrors: { len: 36, lenEasy: 46, thick: 4, maxChain: 6, flipClear: 6 }
+      mirrors: { len: 36, lenEasy: 46, thick: 4, maxChain: 6, flipClear: 6 },
+      // ---- Act two. World 9: player powers (used by tapping while the ball is in play)
+      powershot: {
+        window: 0.32, windowEasy: 0.5,     // s before the ball reaches the paddle in which a tap arms the shot
+        late: 0.16, lateEasy: 0.26,        // s after the bounce in which a tap still counts
+        ringTime: 0.9,                     // the timing ring starts closing this long before the ball arrives
+        boost: 1.5, pierce: 3, pierceEasy: 4, // speed factor (decays like a bumper kick) and bricks it punches through
+        recharge: 2.2, rechargeEasy: 1.4   // s before the next power shot is ready
+      },
+      slowmo: {
+        scale: 0.4, scaleEasy: 0.33,       // world speed while slowed (the paddle keeps full speed)
+        drain: 2.6, recharge: 7, rechargeEasy: 4.5, // s of slow-mo in a full meter; s to refill it from empty
+        minStart: 0.3                      // share of the meter needed to start it
+      },
+      curve: {
+        accel: 820, accelEasy: 700,        // px/s^2 of sideways bend at full paddle speed
+        fullAt: 420,                       // paddle speed (px/s) that gives the full bend
+        budget: 0.75, budgetEasy: 0.95,    // s of full bend per flight (refilled by the paddle)
+        lowY: 470,                         // no bending below this height (it cannot be used to steer a falling ball onto the paddle)
+        maxDeg: 55                         // bending never makes the path flatter than this from vertical (no sideways crawl)
+      },
+      safetywall: {
+        y: 610, time: 1.5, timeEasy: 2.3,  // the floor's height and how long it stays up (s)
+        charges: 2, chargesEasy: 3, max: 4, // charges at the start (and after a lost life) and at most
+        splitEvery: 9                      // the level splits the ball into three every this many bricks broken (0 = never)
+      },
+      // World 10: living bricks
+      hatch: {
+        first: 7, every: 4.5, jitter: 1.5, warn: 2.6, // s until the first egg hatches, then between eggs; wobble warning before
+        slowEasy: 1.5,                     // Easy: everything about eggs and critters is this much slower
+        walk: 34, sway: 26,                // critter speed down the screen (px/s) and side-to-side wander (px)
+        shrink: 5, shrinkEasy: 2.5,        // s a critter on the paddle shrinks it for
+        radius: 9
+      },
+      puppet: { range: 150, mirror: 1, speed: 320, ballMargin: 2 }, // offset limit, mirror factor, catch-up speed (px/s)
+      builders: {
+        speed: 34, build: 3.2, buildEasy: 5, // bot speed (px/s); s to rebuild one brick
+        botHp: 2, ballMargin: 16, firstDelay: 3 // a brick is never rebuilt with a ball this close; bots wait this long first
+      },
+      paint: { gateH: 10 },
+      // World 11: topsy-turvy
+      cannon: {
+        gravity: 165, gravityEasy: 105,    // px/s^2 that bend the ball down
+        angleMul: 0.56,                    // the paddle's bounce angles are narrowed by this, so every shot climbs
+        topMul: 0.72,                      // ball speed at the top of the field (share of its speed at the paddle)
+        minVy: 0.1,                        // the ball's minimum vertical speed (share), lower so arcs can turn over
+        predictSeconds: 1.0
+      },
+      skyscraper: { screens: 3, follow: 9, high: 150, low: 400, mapW: 10 }, // camera keeps the ball between high and low (screen y)
+      numbers: { hintAfter: 8 },           // s without the next number before the hint arrow grows
+      flip: {
+        first: 9, every: 26, everyEasy: 38, warn: 3, warnEasy: 4, // s; Hard flips a little more often (hazardScale)
+        turn: 1.6, worldScale: 0.12        // s the turn takes; world speed during the turn (the paddle waits)
+      }
     },
 
     bosses: {
@@ -170,6 +225,22 @@
       machine: {
         hp: [3, 3, 4], coreRadius: 17, transition: 2.4, // core hits per phase (Normal), seconds between phases
         sway: 50, swayPeriod: 7
+      },
+      // act two
+      keeper: {
+        goals: 8, mouth: 128, w: 60, y: 48,  // goals to win (Normal), goal mouth width, keeper width, keeper's distance below the goal line
+        speed: 260, react: 0.16, commitY: 380, // dive speed (px/s), thinking time, it reads the shot once the ball is above this
+        dazed: 1.6, idleSpeed: 120
+      },
+      queen: {
+        hp: 7, bodyRadius: 22, ring: 50, slots: 12, outer: 86, outerSlots: 16, // hits; egg rings around her
+        clutch: 14,                        // eggs she lays each time (into random empty slots), so there are always ways in
+        lay: 2.4, brood: 9, broodEasy: 13, shut: 2.2, // s laying (tell), eggs shut (she can be hit), shell closed while they hatch
+        bob: 14
+      },
+      architect: {
+        hp: [3, 3, 3, 4], coreRadius: 18, transition: 3.0, // core hits per phase (Normal), seconds between phases
+        sway: 40, swayPeriod: 8
       }
     },
 

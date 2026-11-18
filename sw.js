@@ -1,5 +1,5 @@
 // Brick Twist service worker: offline play after the first visit, and updates that always reach players.
-// build.py copies this file to ../sw.js and stamps 1bae9abdf3e2 (a hash of the page and every cached file), so
+// build.py copies this file to ../sw.js and stamps cc07f47799c4 (a hash of the page and every cached file), so
 // each build that changes anything gets a new cache. Nobody bumps a number by hand.
 //
 //  - The page (any navigation, index.html): network first, so an online player always gets the newest build.
@@ -9,7 +9,7 @@
 //  - A new worker takes over at once, and deletes every older brick-twist cache when it activates.
 'use strict';
 
-var VERSION = '1bae9abdf3e2';
+var VERSION = 'cc07f47799c4';
 var PREFIX = 'brick-twist-';
 var CACHE = PREFIX + VERSION;
 var FILES = [

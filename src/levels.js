@@ -12,7 +12,10 @@
     { n: 5, name: 'Flip the rules', tint: '#2a1414', accent: '#ff6b6b' },
     { n: 6, name: 'Mash-ups', tint: '#14261a', accent: '#2ee0a4' },
     { n: 7, name: 'The elements', tint: '#10223a', accent: '#7fd4ff' },
-    { n: 8, name: 'Wits', tint: '#26182e', accent: '#ff9f43' }
+    { n: 8, name: 'Wits', tint: '#26182e', accent: '#ff9f43' },
+    { n: 9, name: 'New powers', tint: '#1d2242', accent: '#ffe27a', act: 2 },
+    { n: 10, name: 'Living bricks', tint: '#1b2a16', accent: '#b6f07a', act: 2 },
+    { n: 11, name: 'Topsy-turvy', tint: '#2a1838', accent: '#7cf5ff', act: 2 }
   ];
 
   var LEVELS = [
@@ -634,7 +637,7 @@
       rules: [{ id: 'mirrors', mirrors: [{ x: 180, y: 136, dir: 1 }, { x: 120, y: 250, dir: 1 }, { x: 240, y: 250, dir: -1 }] }]
     },
     {
-      id: 40, world: 8, name: 'The Machine', twist: 'boss-machine', par: 175, clear: 'boss', boss: true, final: true,
+      id: 40, world: 8, name: 'The Machine', twist: 'boss-machine', par: 175, clear: 'boss', boss: true, actEnd: true,
       banner: 'Final boss! The Machine has three phases. Hit its red eye when it is open.',
       grid: [
         '............', '............', '............', '............', '............', '............',
@@ -642,6 +645,243 @@
         'C..........C'
       ],
       rules: [{ id: 'machine' }]
+    },
+
+    // ======================= Act two =======================
+    // Taps are powers here, so the Laser and Catch capsules (which also use taps) are left out of these levels.
+    // ---------------- World 9: New powers ----------------
+    {
+      id: 41, world: 9, name: 'Power Shot', twist: 'powershot', par: 110, noCapsules: ['laser', 'catch'],
+      banner: 'New power! Tap just as the ball lands on your paddle (the ring shows when) for a POWER SHOT that smashes through bricks.',
+      grid: [
+        '............',
+        '..33333333..',
+        '.3yyyyyyyy3.',
+        '.3yCyyyyCy3.',
+        '.3yyyyyyyy3.',
+        '..33333333..',
+        '............',
+        '............',
+        '...3....3...'
+      ],
+      rules: [{ id: 'powershot' }]
+    },
+    {
+      id: 42, world: 9, name: 'Slow-Mo', twist: 'slowmo', par: 140, noCapsules: ['laser', 'catch'],
+      banner: 'New power! Tap to slow time down (tap again to stop). Your paddle stays fast. Use it to aim through the narrow gaps.',
+      grid: [
+        '............',
+        '#ppp####ppp#',
+        '#pCp####pCp#',
+        '#ppp####ppp#',
+        '##..####..##',
+        '............',
+        '............',
+        '............',
+        '....bbbb....',
+        '............',
+        'yy........yy'
+      ],
+      rules: [{ id: 'slowmo' }, { id: 'pinball', bumpers: [{ x: 180, y: 244 }, { x: 116, y: 296 }, { x: 244, y: 296 }], gates: [] }]
+    },
+    {
+      id: 43, world: 9, name: 'Curveball', twist: 'curve', par: 130, noCapsules: ['laser', 'catch'],
+      banner: 'New power! While the ball flies up, move your paddle to bend it the same way. Curve it round the steel!',
+      grid: [
+        '............',
+        '............',
+        '...cccccc...',
+        '...cbCbbc...',
+        '...cccccc...',
+        '............',
+        '..########..',
+        '............',
+        '............',
+        '...yy..yy...'
+      ],
+      rules: [{ id: 'curve' }]
+    },
+    {
+      id: 44, world: 9, name: 'Safety Wall', twist: 'safetywall', par: 105, noCapsules: ['laser', 'catch'],
+      banner: 'New power! Tap to raise a wall under your paddle for a moment. Watch out: this level loves multi-ball! Shield bricks give more walls.',
+      grid: [
+        '............',
+        'rrrrrrrrrrrr',
+        'oFooooooooFo',
+        'yyyyyyyyyyyy',
+        'gggFggggFggg',
+        'cccccccccccc',
+        '............',
+        '..bbbbbbbb..'
+      ],
+      rules: [{ id: 'safetywall' }]
+    },
+    {
+      id: 45, world: 9, name: 'The Keeper', twist: 'boss-keeper', par: 150, clear: 'boss', boss: true, noCapsules: ['laser', 'catch'],
+      banner: 'Boss! Score goals past The Keeper. It stops straight shots: use a Power Shot, or curve the ball after it dives!',
+      grid: [
+        '............', '............', '............', '............', '............', '............',
+        '............', '............', '............', '............', '............', '............',
+        '............', '............',
+        'C..........C'
+      ],
+      rules: [{ id: 'keeper' }, { id: 'powershot' }, { id: 'curve' }, { id: 'slowmo' }]
+    },
+
+    // ---------------- World 10: Living bricks ----------------
+    {
+      id: 46, world: 10, name: 'Hatchlings', twist: 'hatch', par: 105,
+      banner: 'Eggs! They wobble, then hatch into critters that shrink your paddle. Break eggs early or bop the critters!',
+      grid: [
+        '............',
+        '.rrrrrrrrrr.',
+        '.rEoooooEor.',
+        '.yyyyEyyyyy.',
+        '.gEggggggEg.',
+        '............',
+        '...cccccc...'
+      ],
+      rules: [{ id: 'hatch' }]
+    },
+    {
+      id: 47, world: 10, name: 'Puppet Strings', twist: 'puppet', par: 115,
+      banner: 'The purple block is a puppet: it slides the opposite way to your paddle. Move it over the gap to hit it!',
+      grid: [
+        '............',
+        '...pppppp...',
+        '...mCmmCm...',
+        '...pppppp...',
+        '............',
+        '............',
+        '####....####',
+        '............',
+        '..yy....yy..'
+      ],
+      rules: [{ id: 'puppet', rows: [1, 2, 3] }]
+    },
+    {
+      id: 48, world: 10, name: 'Builder Bots', twist: 'builders', par: 120,
+      banner: 'Builder bots rebuild broken bricks! Knock the robots out first (two hits each).',
+      grid: [
+        '............',
+        '.oooooooooo.',
+        '.yyyCyyyyCy.',
+        '.gggggggggg.',
+        '............',
+        '............',
+        '............',
+        '............',
+        '...cc..cc...'
+      ],
+      rules: [{ id: 'builders', bots: [{ row: 5, c0: 0, c1: 5, rows: [1, 3] }, { row: 5, c0: 6, c1: 11, rows: [1, 3] }] }]
+    },
+    {
+      id: 49, world: 10, name: 'Paint Job', twist: 'paint', par: 130,
+      banner: 'Send the ball up through a paint gate to colour it. It only breaks bricks of its own colour and shape!',
+      grid: [
+        '............',
+        'RRR..YY..BBB',
+        'RRR..YY..BBB',
+        'RR...YY...BB',
+        '............',
+        '....BYYR....',
+        '............',
+        '.ww......ww.'
+      ],
+      rules: [{ id: 'paint', start: 'yellow', gates: [{ x: 8, y: 352, w: 80, color: 'red' }, { x: 140, y: 384, w: 80, color: 'yellow' }, { x: 272, y: 352, w: 80, color: 'blue' }] }]
+    },
+    {
+      id: 50, world: 10, name: 'The Queen', twist: 'boss-queen', par: 130, clear: 'boss', boss: true,
+      banner: 'Boss! The Queen hides inside her eggs. Break a way in and hit her before they hatch!',
+      grid: [
+        '............', '............', '............', '............', '............', '............',
+        '............', '............', '............', '............', '............', '............',
+        '............', '............', '............', '............',
+        'C..........C'
+      ],
+      rules: [{ id: 'queen' }]
+    },
+
+    // ---------------- World 11: Topsy-turvy ----------------
+    {
+      id: 51, world: 11, name: 'Cannonball', twist: 'cannon', par: 125,
+      banner: 'Heavy ball! It flies in arcs and falls back down. Lob it over the steel. The dotted arc shows its path.',
+      grid: [
+        '............',
+        '............',
+        '..pp....pp..',
+        '..pp....pp..',
+        '..##....##..',
+        '............',
+        '.....cc.....',
+        '.....##.....',
+        '............',
+        '............',
+        'g.g.g..g.g.g'
+      ],
+      rules: [{ id: 'cannon' }]
+    },
+    {
+      id: 52, world: 11, name: 'Skyscraper', twist: 'skyscraper', par: 170,
+      banner: 'This level is three screens tall! The view follows the ball. The strip on the right shows the whole tower.',
+      grid: [],
+      rules: [{ id: 'skyscraper', floors: {
+        2: '...rrTTrr...',
+        18: '###......###',
+        30: '...oo..oo...',
+        46: '####....####',
+        56: '....y22y....',
+        70: '##........##',
+        78: '...g.CC.g...',
+        88: '....####....',
+        94: 'cc........cc'
+      } }]
+    },
+    {
+      id: 53, world: 11, name: 'By the Numbers', twist: 'numbers', par: 100,
+      banner: 'Break the numbered bricks in order: 1, 2, 3... The next one glows. The others just bounce the ball.',
+      grid: [
+        'C..........C',
+        '............',
+        '...N....N...',
+        '............',
+        '............',
+        '.N........N.',
+        '............',
+        '.....NN.....',
+        '............',
+        '..N......N..',
+        '............',
+        '............',
+        '#....##....#'
+      ],
+      rules: [{ id: 'numbers', order: [[9, 2], [9, 9], [7, 5], [7, 6], [5, 1], [5, 10], [2, 3], [2, 8]] }]
+    },
+    {
+      id: 54, world: 11, name: 'Flip', twist: 'flip', par: 130,
+      banner: 'Every so often the whole level turns upside down! Sun bricks are solid the right way up, moon bricks upside down.',
+      grid: [
+        '............',
+        '.UUUU..DDDD.',
+        '.rrrr..bbbb.',
+        '.UrrU..DbbD.',
+        '............',
+        '...DD..UU...',
+        '............',
+        '..gggggggg..'
+      ],
+      rules: [{ id: 'flip' }]
+    },
+    {
+      id: 55, world: 11, name: 'The Architect', twist: 'boss-architect', par: 210, clear: 'boss', boss: true, final: true, noCapsules: ['laser', 'catch'],
+      banner: 'Final boss! The Architect rebuilds the arena four times. All three powers are yours: Power Shot, Slow-Mo and Curveball.',
+      grid: [
+        '............', '............', '............', '............', '............', '............',
+        '............', '............', '............', '............', '............', '............',
+        '............', '............', '............', '............',
+        'C..........C'
+      ],
+      rules: [{ id: 'architect' }, { id: 'powershot' }, { id: 'slowmo' }, { id: 'curve' }]
     }
   ];
 

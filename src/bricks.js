@@ -17,6 +17,12 @@
 //   I                   frozen brick (one hit thaws it, the next breaks it)
 //   X                   splitter (Big and Small: splits the big ball; unbreakable, not needed to clear)
 //   H                   pusher (Closing Walls: hit to shove the walls back out; unbreakable)
+//   Act two:
+//   F                   shield brick (Safety Wall: breaking it gives a wall charge)
+//   E                   egg (Hatchlings: hatches into a critter after a while)
+//   Y                   yellow paint brick (Paint Job; with R and B: red dot, blue square, yellow triangle)
+//   N                   numbered brick (By the Numbers: the rule numbers them)
+//   U D                 sun / moon bricks (Flip: solid only the right way up / only upside down)
 (function (BT) {
   'use strict';
 
@@ -40,6 +46,12 @@
   var ICE_COLOR = '#58c6ff';      // the colour underneath once a frozen brick has thawed
   var SPLITTER_COLOR = '#c56bff';
   var PUSHER_COLOR = '#ffb347';
+  var SHIELD_COLOR = '#7cf5ff';
+  var EGG_COLOR = '#fff3d6';
+  var YELLOW_COLOR = '#ffd23d';
+  var NUM_COLOR = '#ffffff';
+  var SUN_COLOR = '#ffb347';
+  var MOON_COLOR = '#9fb4ff';
 
   function make(type, x, y, w, h) {
     return {
@@ -98,6 +110,18 @@
         b = make('splitter', x, y, w, h); b.breakable = false; b.required = false; b.noBlast = true; b.color = SPLITTER_COLOR; return b;
       case 'H':
         b = make('pusher', x, y, w, h); b.breakable = false; b.required = false; b.noBlast = true; b.color = PUSHER_COLOR; return b;
+      case 'F':
+        b = make('shield', x, y, w, h); b.color = SHIELD_COLOR; return b;
+      case 'E':
+        b = make('egg', x, y, w, h); b.color = EGG_COLOR; return b;
+      case 'Y':
+        b = make('normal', x, y, w, h); b.color = YELLOW_COLOR; b.group = 'yellow'; b.mark = 'tri'; return b;
+      case 'N':
+        b = make('num', x, y, w, h); b.color = NUM_COLOR; return b;
+      case 'U':
+        b = make('normal', x, y, w, h); b.color = SUN_COLOR; b.side = 'up'; b.mark = 'sun'; return b;
+      case 'D':
+        b = make('normal', x, y, w, h); b.color = MOON_COLOR; b.side = 'down'; b.mark = 'moon'; return b;
     }
     return null;
   }
@@ -110,7 +134,8 @@
     KEY_COLOR: KEY_COLOR, LOCK_COLOR: LOCK_COLOR, ANCHOR_COLOR: ANCHOR_COLOR,
     GLOW_COLOR: GLOW_COLOR, RED_COLOR: RED_COLOR, BLUE_COLOR: BLUE_COLOR, VINE_COLOR: VINE_COLOR, ROOT_COLOR: ROOT_COLOR,
     ICE_COLOR: ICE_COLOR, SPLITTER_COLOR: SPLITTER_COLOR, PUSHER_COLOR: PUSHER_COLOR,
+    SHIELD_COLOR: SHIELD_COLOR, EGG_COLOR: EGG_COLOR, YELLOW_COLOR: YELLOW_COLOR, SUN_COLOR: SUN_COLOR, MOON_COLOR: MOON_COLOR,
     make: make, fromChar: fromChar, isHardWall: isHardWall,
-    LEGEND: '.rroygcbpmw23#TKLCAGRBSVOIXH'
+    LEGEND: '.rroygcbpmw23#TKLCAGRBSVOIXHFEYNUD'
   };
 })(typeof window !== 'undefined' ? (window.BT = window.BT || {}) : (globalThis.BT = globalThis.BT || {}));

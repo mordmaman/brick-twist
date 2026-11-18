@@ -129,6 +129,15 @@
     ctx.fillStyle = col;
     if (b.mark === 'dot') { ctx.beginPath(); ctx.arc(cx, cy, 3, 0, TAU); ctx.fill(); }
     else if (b.mark === 'square') ctx.fillRect(cx - 3, cy - 3, 6, 6);
+    else if (b.mark === 'tri') { ctx.beginPath(); ctx.moveTo(cx, cy - 3.6); ctx.lineTo(cx + 3.6, cy + 2.8); ctx.lineTo(cx - 3.6, cy + 2.8); ctx.closePath(); ctx.fill(); }
+    else if (b.mark === 'sun') {
+      ctx.beginPath(); ctx.arc(cx, cy, 2.6, 0, TAU); ctx.fill();
+      ctx.strokeStyle = col; ctx.lineWidth = 1.2; ctx.beginPath();
+      for (var i = 0; i < 8; i++) { var a = i * TAU / 8; ctx.moveTo(cx + Math.cos(a) * 3.8, cy + Math.sin(a) * 3.8); ctx.lineTo(cx + Math.cos(a) * 5.4, cy + Math.sin(a) * 5.4); }
+      ctx.stroke();
+    } else if (b.mark === 'moon') {
+      ctx.save(); ctx.beginPath(); ctx.arc(cx, cy, 4.2, 0, TAU); ctx.arc(cx + 2.4, cy - 1.6, 3.6, 0, TAU, true); ctx.fill('evenodd'); ctx.restore();
+    }
   }
 
   // A brick that is see-through (or fading): faint fill, dashed outline. b.warn pulses a white outline just
@@ -277,6 +286,26 @@
         ctx.beginPath(); ctx.moveTo(x + 3, cy); ctx.lineTo(x + 9, cy - 4.5); ctx.lineTo(x + 9, cy + 4.5); ctx.closePath(); ctx.fill();
         ctx.beginPath(); ctx.moveTo(x + w - 3, cy); ctx.lineTo(x + w - 9, cy - 4.5); ctx.lineTo(x + w - 9, cy + 4.5); ctx.closePath(); ctx.fill();
         ctx.fillRect(x + 9, cy - 1, w - 18, 2);
+        break;
+      case 'shield': // Safety Wall charge: a shield icon
+        ctx.fillStyle = '#0a4a55';
+        ctx.beginPath(); ctx.moveTo(cx, cy - 5); ctx.lineTo(cx + 5, cy - 3); ctx.lineTo(cx + 4, cy + 1.5); ctx.quadraticCurveTo(cx + 2, cy + 4.5, cx, cy + 5.5);
+        ctx.quadraticCurveTo(cx - 2, cy + 4.5, cx - 4, cy + 1.5); ctx.lineTo(cx - 5, cy - 3); ctx.closePath(); ctx.fill();
+        ctx.strokeStyle = 'rgba(200,255,255,' + (0.35 + 0.3 * Math.sin(t * 4 + x)).toFixed(3) + ')'; ctx.lineWidth = 1.5; roundRect(ctx, x - 1, y - 1, w + 2, h + 2, 4); ctx.stroke();
+        break;
+      case 'egg': // drawn over the plain brick: a speckled egg that wobbles and cracks before it hatches
+        var wob = b.wobble || 0, ang = wob > 0 ? Math.sin(t * (10 + 18 * wob)) * 0.25 * wob : 0;
+        ctx.fillStyle = 'rgba(10,14,30,0.85)'; roundRect(ctx, x, y, w, h, 3); ctx.fill();
+        ctx.save(); ctx.translate(cx, cy + 1); ctx.rotate(ang);
+        ctx.fillStyle = b.flash > 0 ? '#ffffff' : '#fff3d6'; ctx.beginPath(); ctx.ellipse(0, 0, Math.min(w, 20) * 0.42, h * 0.5, 0, 0, TAU); ctx.fill();
+        ctx.fillStyle = '#e9b86a';
+        ctx.beginPath(); ctx.arc(-3, -2, 1.4, 0, TAU); ctx.arc(2.5, 1.5, 1.2, 0, TAU); ctx.arc(4, -3, 0.9, 0, TAU); ctx.fill();
+        if (wob > 0.35) { ctx.strokeStyle = '#6b4a20'; ctx.lineWidth = 1.1; ctx.beginPath(); ctx.moveTo(-6, -1); ctx.lineTo(-3, 1); ctx.lineTo(-1, -2); ctx.lineTo(2, 1); if (wob > 0.7) { ctx.lineTo(4, -1); ctx.lineTo(6, 1); } ctx.stroke(); }
+        ctx.restore();
+        break;
+      case 'num': // By the Numbers: the number, dark on the brick
+        ctx.fillStyle = b.isNext ? '#2b1d00' : 'rgba(20,24,40,0.85)'; ctx.font = 'bold 11px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(String(b.num || ''), cx, cy + 0.5);
         break;
       case 'core':
         var pu = 0.5 + 0.5 * Math.sin(t * 6);
@@ -468,9 +497,14 @@
       roundRect(ctx, ex, ey, 22, 16, 5); ctx.fillStyle = 'rgba(5,7,16,0.7)'; ctx.fill();
       ctx.fillStyle = '#ff7a3d'; ctx.strokeStyle = '#ff7a3d'; drawIcon(ctx, 'bomb', ex + 11, ey + 8, 10);
     }
+    // act two: the power strip under the HUD (the chips are drawn by the power rules)
+    if (g.powers && g.powers.length) {
+      ctx.fillStyle = 'rgba(5,7,16,0.92)'; ctx.fillRect(0, C.TOP, C.W, g.topY - C.TOP);
+      ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fillRect(0, g.topY - 1, C.W, 1);
+    }
     // boss bar
     if (g.boss && !g.boss.s.defeated) {
-      var s = g.boss.s, bw = 150, bx = C.W - bw - 8, by = C.TOP + 6;
+      var s = g.boss.s, bw = 150, bx = C.W - bw - 8, by = C.TOP + 6 + (g.powers && g.powers.length ? 22 : 0);
       ctx.fillStyle = 'rgba(255,255,255,0.75)'; ctx.font = 'bold 9px ' + FONT; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
       ctx.fillText(g.boss.mod.bossName.toUpperCase(), bx - 6, by + 4);
       roundRect(ctx, bx, by, bw, 8, 4); ctx.fillStyle = 'rgba(255,255,255,0.15)'; ctx.fill();
@@ -487,10 +521,18 @@
       ctx.drawImage(background(world, scale), 0, 0, C.W, C.H);
       ctx.save();
       if (g.shakeAmt > 0) ctx.translate((Math.random() - 0.5) * g.shakeAmt * 2, (Math.random() - 0.5) * g.shakeAmt * 2);
+      // act two: the field can be turned (Flip) and scrolled (a tall level); the HUD below never is
+      if (g.viewAngle) {
+        var fcy = (C.TOP + C.H) / 2, turn = Math.sin(g.viewAngle), zoom = 1 - 0.3 * turn * turn;
+        ctx.beginPath(); ctx.rect(0, C.TOP, C.W, C.H - C.TOP); ctx.clip();
+        ctx.translate(C.W / 2, fcy); ctx.rotate(g.viewAngle); ctx.scale(zoom, zoom); ctx.translate(-C.W / 2, -fcy);
+      }
+      if (g.topY < C.TOP) { ctx.beginPath(); ctx.rect(0, C.TOP, C.W, C.H - C.TOP); ctx.clip(); } // a tall level: nothing shows behind the HUD
+      if (g.cam) ctx.translate(0, -g.cam);
       // walls
       if (!g.wrapX) {
         ctx.fillStyle = 'rgba(120,160,255,0.18)';
-        ctx.fillRect(0, C.TOP, 2, C.H - C.TOP); ctx.fillRect(C.W - 2, C.TOP, 2, C.H - C.TOP);
+        ctx.fillRect(0, g.topY, 2, C.H - g.topY); ctx.fillRect(C.W - 2, g.topY, 2, C.H - g.topY);
       }
       var i, r;
       for (i = 0; i < g.rules.length; i++) { r = g.rules[i]; if (r.mod.render) r.mod.render(ctx, g, r, 'back', R); }
@@ -519,15 +561,17 @@
       for (i = 0; i < g.rules.length; i++) { r = g.rules[i]; if (r.mod.render) r.mod.render(ctx, g, r, 'front', R); }
       ctx.restore();
       drawHUD(ctx, g, opts.label || '', opts);
+      for (i = 0; i < g.rules.length; i++) { r = g.rules[i]; if (r.mod.renderHUD) r.mod.renderHUD(ctx, g, r, R); }
       // serve hint
       if (g.state === 'serve' && opts.hint) {
         var a = 0.55 + 0.35 * Math.sin(g.t * 4);
         ctx.fillStyle = 'rgba(255,255,255,' + a.toFixed(3) + ')';
         ctx.font = 'bold 14px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText(opts.hint, C.W / 2, C.paddle.y - 70);
+        var hy = g.viewFlip ? C.TOP + C.H - (C.paddle.y - 70) - 30 : C.paddle.y - 70; // upside down: near the paddle, at the top
+        ctx.fillText(opts.hint, C.W / 2, hy);
         if (opts.sub) {
           ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.font = '12px ' + FONT;
-          wrapText(ctx, opts.sub, C.W / 2, C.paddle.y - 48, C.W - 40, 15);
+          wrapText(ctx, opts.sub, C.W / 2, hy + 22, C.W - 40, 15);
         }
       }
     },
